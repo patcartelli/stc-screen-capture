@@ -3243,20 +3243,19 @@ $("pipframedone").addEventListener("click", commitReframe);
 // STC-497: thirds guides. An editing aid, so this touches only the DOM and the
 // app setting, never the project, render() or an export.
 let framingGuides = false;
+// A click before the stored value arrives wins over it (the read below).
+let framingGuidesTouched = false;
 function drawFramingGuides(): void {
   $("pipguides").hidden = !framingGuides;
   $("pipguidesbtn").setAttribute("aria-pressed", String(framingGuides));
 }
 function toggleFramingGuides(): void {
+  framingGuidesTouched = true;
   framingGuides = !framingGuides;
   drawFramingGuides();
   void editor.setFramingGuides(framingGuides).catch(() => {});
 }
 $("pipguidesbtn").addEventListener("click", toggleFramingGuides);
-void editor.getSettings().then((s) => {
-  framingGuides = s.framingGuides === true;
-  drawFramingGuides();
-}).catch(() => {});
 // Capture phase + stopImmediatePropagation: Escape here ends the reframe and
 // nothing else (not the override editor's, not the frame menu's, not the timeline's).
 window.addEventListener("keydown", (e) => {
@@ -4211,6 +4210,8 @@ void editor.getSettings().then((s) => {
   previewMuted = s.previewMuted === true;
   previewAudio?.setMuted(previewMuted);
   updatePreviewAudioButton();
+  // STC-497: the same read seeds the reframe guides.
+  if (!framingGuidesTouched) { framingGuides = s.framingGuides === true; drawFramingGuides(); }
 }).catch(() => {});
 
 // ---- keyboard grammar (STC-338 rule 8) --------------------------------
@@ -4250,7 +4251,9 @@ window.addEventListener("keydown", (e) => {
   // switches and the section tabs take Space/Enter.
   if (($("audiopanel").contains(e.target as Node) || $("sectionswitch").contains(e.target as Node)
         || $("exportpanel").contains(e.target as Node) || $("zoompanel").contains(e.target as Node)
-        || $("framepanel").contains(e.target as Node))
+        || $("framepanel").contains(e.target as Node)
+        // The Reframe bar (STC-497): Guides is a toggle, Done a button.
+        || $("pipframebar").contains(e.target as Node))
       && (RANGE_NATIVE_KEYS.has(e.key) || e.key === " " || e.key === "Enter")) return;
   // The same for the per-track mutes (STC-454 part 3).
   if ((e.target === $("micmute") || e.target === $("sysmute")) && (e.key === " " || e.key === "Enter")) return;

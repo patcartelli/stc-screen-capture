@@ -126,6 +126,34 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
     expect(savedPip(takeDir).style.width).not.toBe(0.5);   // the temporary display style never leaked
   }, 120_000);
 
+  test("reframe: the Guides button toggles the thirds, Space works on it, and it persists (STC-497)", async () => {
+    const { app: a, editorWin } = await launchWithTakeInEditor({ pip: true });
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await editorWin.click("#pipbtn");
+    await openMore(editorWin, "pippanel");
+    await editorWin.click("#pipreframe");
+    const hidden = () => editorWin.locator("#pipguides").evaluate((el) => (el as HTMLElement).hidden);
+    const pressed = () => editorWin.locator("#pipguidesbtn").getAttribute("aria-pressed");
+    expect(await hidden()).toBe(true);
+    expect(await pressed()).toBe("false");
+    await editorWin.click("#pipguidesbtn");
+    expect(await hidden()).toBe(false);
+    expect(await pressed()).toBe("true");
+    // Space on the focused button belongs to the button, not to play/pause.
+    const playing = () => editorWin.evaluate(() => document.getElementById("playpause")?.getAttribute("aria-label") ?? null);
+    const before = await playing();
+    await editorWin.focus("#pipguidesbtn");
+    await editorWin.keyboard.press("Space");
+    expect(await hidden()).toBe(true);
+    expect(await pressed()).toBe("false");
+    expect(await playing()).toBe(before);
+    await editorWin.keyboard.press("Space");
+    expect(await hidden()).toBe(false);
+    const userData = await a.evaluate(({ app: ea }) => ea.getPath("userData"));
+    await expect.poll(() => readJson(userData, "settings.json").framingGuides, { timeout: 10_000 }).toBe(true);
+  }, 120_000);
+
   test("reframe: leaving the page mid-reframe commits it rather than dropping it", async () => {
     const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ pip: true });
     app = a;

@@ -69,7 +69,7 @@ Open a take recorded before this branch. Its PiP must sit exactly where it alway
 
 ## What is deliberately not here
 
-- Framing guides (thirds, fifths): **STC-497**. `#pipframewindow` is the surface they will draw on.
+- Fifths and other guide sets. Thirds shipped as STC-497 (the Guides button on the Reframe bar).
 - Mid-take PiP changes or keyframes. One layout per take.
 - Undo. The editor has none; revert by hand or with a preset.
 - A live camera feed in Settings (it would light the camera LED to set a preference), and reframe in Settings.
