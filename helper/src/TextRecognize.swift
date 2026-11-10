@@ -19,10 +19,16 @@ import Vision
 /// `warm-text`: one recognition over a drawn line of text, so the first real
 /// Capture Text is fast.
 ///
-/// Measured 2026-11-03 (runbook §1): the first Vision call by a new binary
-/// took ~40-45 s of wall time (5 s of CPU, the rest the ANE compiler), and
-/// every later call 0.1-0.6 s, in the same process or a fresh one. A rebuilt
-/// helper paid it again, so every app update would. The frame is the one the
+/// Measured 2026-11-03 (runbook §1): the first Vision call took ~40-45 s of
+/// wall time (5 s of CPU, the rest `ANECompilerService` compiling the models
+/// for the Neural Engine), and every later call 0.1-0.6 s, in the same process
+/// or a fresh one. STC-641 (2026-11-10) found what that cache is keyed on: the
+/// EXECUTABLE'S FILE NAME, one entry per name, checked against the code-signing
+/// identifier. A new cdhash, path or signer keeps it warm, so an app update is
+/// warm (packaged v1 cold 47 s, then packaged v2 136 ms). What pays it is the
+/// first use on a Mac, or any binary named `stc-helper` signed with another
+/// identifier, which evicts the entry: keep the name and identifier
+/// `stc-helper` (`helper-identity.test.ts`). The frame is the one the
 /// measurement paid the cost on (a 1200x100 sentence); whether a blank or a
 /// smaller one would also pay it was not established, so it is not relied on.
 /// Main sends this whenever a helper comes up (Patrick, 2026-11-03: warm at
