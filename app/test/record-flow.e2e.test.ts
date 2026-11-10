@@ -686,6 +686,58 @@ describe("system audio and the camera device reach start (STC-456, absorbs STC-4
     return overlay;
   }
 
+  // STC-479 through the real app: the bar's camera menu tags a virtual camera
+  // and lists it after the physical ones. The pure rule is device-picker.test.ts's;
+  // this is what it cannot see — that the helper's `devices` answer reaches the
+  // menu with `virtual` intact and the tag is drawn. (The main window's camera
+  // popover this was first written against left with STC-584.) The cameras are
+  // listed virtual-first so the sort is what puts it last.
+  const cameraRows = async (overlay: Page) => {
+    const rows = overlay.locator("#menu .row");
+    return {
+      labels: await rows.locator(".label").allTextContents(),
+      tags: await rows.locator(".secondary").allTextContents(),
+    };
+  };
+
+  test("the bar's camera menu tags a virtual camera and lists it after the physical ones (STC-479)", async () => {
+    const { win } = await launch({
+      STC_FAKE_CAMERAS: JSON.stringify([
+        { name: "Fixture Virtual Camera", uid: "fixture-virt", virtual: true },
+        { name: "Fixture Webcam", uid: "fixture-cam", virtual: false },
+      ]),
+    });
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "control", id: "camera" });
+    // The device list can land after the bar is up, and the open menu redraws
+    // when it does, so wait on the rows rather than reopening the menu.
+    await expect.poll(async () => (await cameraRows(overlay)).labels, { timeout: 20_000 })
+      .toEqual(["No Camera", "Automatic", "Fixture Webcam", "Fixture Virtual Camera"]);
+    // Only the virtual camera carries the tag, and it is not part of its name.
+    expect((await cameraRows(overlay)).tags).toEqual(["virtual"]);
+  }, 120_000);
+
+  // The control: the same two names with `virtual: false` on both. A tag or an
+  // order derived from the NAME (or from list position) would still pass the
+  // test above; this one fails it.
+  test("without the virtual flag the same cameras get no tag and keep the helper's order (STC-479)", async () => {
+    const { win } = await launch({
+      STC_FAKE_CAMERAS: JSON.stringify([
+        { name: "Fixture Virtual Camera", uid: "fixture-virt", virtual: false },
+        { name: "Fixture Webcam", uid: "fixture-cam", virtual: false },
+      ]),
+    });
+    await withoutCountdown(win);
+    const overlay = await toOptionsPhase(win);
+
+    await send(overlay, { t: "control", id: "camera" });
+    await expect.poll(async () => (await cameraRows(overlay)).labels, { timeout: 20_000 })
+      .toEqual(["No Camera", "Automatic", "Fixture Virtual Camera", "Fixture Webcam"]);
+    expect((await cameraRows(overlay)).tags).toEqual([]);
+  }, 120_000);
+
   test("Include System Audio on → start carries systemAudio: true, and it is written back", async () => {
     const { win, startLog, ud } = await launch();
     await withoutCountdown(win);
