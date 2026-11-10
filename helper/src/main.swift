@@ -167,6 +167,27 @@ final class App {
             // warm camera away. Always answers; releasing nothing is not an error.
             WarmCamera.shared.release()
             IO.send("camera-released", seq: seq, [:])
+        case "camera-preview-start":
+            // STC-638: a live camera view as JPEG frames on the lossy channel,
+            // for the Record options bar's camera menu and Settings > Camera.
+            // Idle only; never a take. The reply waits for the session to run
+            // (a cold open can take seconds); the first frame is a later event.
+            if let refusal = previewStartRefusal(idle: state == .idle) {
+                IO.send("error", seq: seq, ["code": refusal.code, "detail": refusal.detail]); return
+            }
+            CameraPreview.shared.start(deviceUid: cmd["deviceUid"] as? String) { result in
+                switch result {
+                case .success(let o):
+                    IO.send("camera-preview-started", seq: seq, ["device": o.name, "uid": o.uid, "openMs": o.openMs])
+                case .failure(let e):
+                    let code = (e as? CameraError)?.code ?? (e as? CameraWarmError)?.code ?? "camera-failed"
+                    IO.send("error", seq: seq, ["code": code, "detail": "\(e)"])
+                }
+            }
+        case "camera-preview-stop":
+            // Always answers; stopping nothing is not an error.
+            let was = CameraPreview.shared.stop(reason: .stopped)
+            IO.send("camera-preview-stopped", seq: seq, ["reason": PreviewStopReason.stopped.rawValue, "wasRunning": was])
         case "capture-still":
             captureStill(cmd, seq: seq)
         case "recognize-text":
@@ -274,6 +295,9 @@ final class App {
         guard state == .idle else {
             IO.send("error", seq: seq, ["code": "bad-state", "detail": "cannot start while \(state.rawValue)"]); return
         }
+        // STC-638: a take owns the camera. A running preview lets go of its output
+        // first (the session stays: the take adopts or releases it).
+        CameraPreview.shared.detachForTake()
         // STC-370: what to capture — the whole display (unchanged), a region
         // of one, or a window — is parsed once, the same way capture-still's
         // request is (parseStillRequest). Answers before touching

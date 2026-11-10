@@ -125,6 +125,21 @@ final class WarmCamera {
         return w
     }
 
+    /// A warm camera exists or is opening (STC-638: the preview opens one only
+    /// when there was none, and releases only what it opened).
+    var isWarm: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return warm != nil || inflight != nil
+    }
+
+    /// Runs `body` on the warm camera, if there is one, without taking it:
+    /// the preview attaches a consumer to its output (STC-638). nil when none.
+    func withWarm<T>(_ body: (OpenedCamera) -> T) -> T? {
+        lock.lock(); defer { lock.unlock() }
+        guard let w = warm else { return nil }
+        return body(w)
+    }
+
     /// Stops the warm camera, if any, and cancels an open in flight.
     func release() {
         lock.lock()

@@ -26,7 +26,7 @@ func arg(_ name: String) -> String? {
 }
 
 guard let outPath = arg("--out") else {
-    FileHandle.standardError.write("usage: --out <result.json> [--probe | --camera-request | --mic-request | --camera-probe --helper <bin> | --cursor-probe --helper <bin> [--ms <n>] [--on-main] | --helper <bin> --dir <sessionDir> --ms <n> [--camera] [--mic <uid>] [--system-audio] [--kill-after-ms <n>]]\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: --out <result.json> [--probe | --camera-request | --mic-request | --camera-probe --helper <bin> | --camera-preview --helper <bin> [--ms <n>] | --cursor-probe --helper <bin> [--ms <n>] [--on-main] | --helper <bin> --dir <sessionDir> --ms <n> [--camera] [--mic <uid>] [--system-audio] [--kill-after-ms <n>]]\n".data(using: .utf8)!)
     exit(2)
 }
 let outURL = URL(fileURLWithPath: outPath)
@@ -409,7 +409,75 @@ func runCursorProbe(helper: String, ms: Int, onMain: Bool) {
     exit(ok ? 0 : 1)
 }
 
+// STC-638: the helper's live camera view, driven from this bundle so the Camera
+// grant is ours. Starts a preview, collects its frames for `ms`, stops it, then
+// checks nothing keeps arriving and a second stop is not an error. Reports
+// numbers; `camera-preview.grant.test.ts` holds them to the rules.
+func runCameraPreview(helper: String, ms: Int) {
+    let child = HelperChild(helper: helper)
+    do { try child.run() } catch {
+        writeResult(["verdict": "spawn-failed", "error": "\(error)"]); exit(4)
+    }
+    guard child.waitFor({ $0["ev"] as? String == "ready" }, timeout: 10) != nil else {
+        writeResult(["verdict": "no-ready"]); child.terminate(); exit(5)
+    }
+    child.send(["cmd": "camera-preview-start", "seq": 1])
+    // A cold open can take seconds (an Elgato measured 3.2 s).
+    guard let started = child.waitFor({ ($0["seq"] as? Int) == 1 }, timeout: 20) else {
+        writeResult(["verdict": "timeout-start"]); child.terminate(); exit(1)
+    }
+    guard started["ev"] as? String == "camera-preview-started" else {
+        writeResult(["verdict": "start-refused", "reply": started]); child.terminate(); exit(1)
+    }
+    usleep(UInt32(ms) * 1000)
+    child.send(["cmd": "camera-preview-stop", "seq": 2])
+    guard let stopped = child.waitFor({ ($0["seq"] as? Int) == 2 }, timeout: 10) else {
+        writeResult(["verdict": "timeout-stop"]); child.terminate(); exit(1)
+    }
+    usleep(700_000)
+    child.send(["cmd": "camera-preview-stop", "seq": 3])
+    let again = child.waitFor({ ($0["seq"] as? Int) == 3 }, timeout: 10)
+    child.send(["cmd": "quit", "seq": 4])
+    _ = child.waitFor({ $0["ev"] as? String == "bye" }, timeout: 5)
+    child.terminate()
+
+    let lines = child.transcript
+    let stopIdx = lines.firstIndex(where: { ($0["seq"] as? Int) == 2 }) ?? lines.count
+    var frames: [[String: Any]] = []
+    var after = 0
+    for (i, l) in lines.enumerated() where l["ev"] as? String == "camera-preview-frame" {
+        if i < stopIdx { frames.append(l) } else { after += 1 }
+    }
+    var jpegOk = true, maxBytes = 0, totalBytes = 0
+    for f in frames {
+        guard let b64 = f["jpeg"] as? String, let d = Data(base64Encoded: b64), d.count > 4 else { jpegOk = false; continue }
+        if !(d[0] == 0xFF && d[1] == 0xD8 && d[2] == 0xFF && d[d.count - 2] == 0xFF && d[d.count - 1] == 0xD9) { jpegOk = false }
+        maxBytes = max(maxBytes, d.count); totalBytes += d.count
+    }
+    var rate = 0.0
+    if frames.count >= 2, let t0 = frames.first?["t"] as? Double, let t1 = frames.last?["t"] as? Double, t1 > t0 {
+        rate = Double(frames.count - 1) / ((t1 - t0) / 1e9)
+    }
+    writeResult(["verdict": "previewed",
+                 "started": started, "stopped": stopped, "stoppedAgain": again as Any,
+                 "frames": frames.count, "framesAfterStopReply": after,
+                 "ratePerSec": rate, "jpegOk": jpegOk,
+                 "width": frames.first?["w"] as Any, "height": frames.first?["h"] as Any,
+                 "maxJpegBytes": maxBytes, "avgJpegBytes": frames.isEmpty ? 0 : totalBytes / frames.count])
+    exit(0)
+}
+
 DispatchQueue.main.async {
+    if args.contains("--camera-preview") {
+        guard let helper = arg("--helper") else {
+            writeResult(["verdict": "bad-args", "detail": "--camera-preview needs --helper <bin>"])
+            exit(2)
+        }
+        DispatchQueue.global().async {
+            runCameraPreview(helper: helper, ms: Int(arg("--ms") ?? "3000") ?? 3000)
+        }
+        return
+    }
     if args.contains("--probe") { runProbe(); return }
     if args.contains("--cursor-probe") {
         guard let helper = arg("--helper") else {
