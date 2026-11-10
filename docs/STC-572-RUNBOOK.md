@@ -26,9 +26,9 @@ Sections 2-4 are **host**: they need a real display and a Screen Recording grant
 | the helper's first `recognize-text` after a rebuild, before any warm-up | `still-timeout` at the old 10 s bound |
 | warm helper, real 800x400 pt selection | 0.35-0.66 s total |
 
-So without a warm-up, the first Capture Text after every app update would fail. `recognize-text` now has its own 60 s bound (`StillCapture.textTimeoutSeconds`; client 65 s, `TEXT_REQUEST_TIMEOUT_MS`), held together by `still-bounds.test.ts`.
+So without a warm-up, the first Capture Text on a Mac would fail. `recognize-text` now has its own 60 s bound (`StillCapture.textTimeoutSeconds`; client 65 s, `TEXT_REQUEST_TIMEOUT_MS`), held together by `still-bounds.test.ts`.
 
-**Not established:** exactly what the cache is keyed on. Several later rebuilds were not cold, so the end-to-end check (warm-up on a truly cold binary, then a fast first Capture Text) is §5's job, not a measured fact.
+**What the cache is keyed on (STC-641, 2026-11-10, host):** the executable's file name, one entry per name, checked against the code-signing identifier. A new cdhash, path or signer is warm; a new name is cold; the same name signed with another identifier is cold AND evicts the entry. So an app update is warm: packaged v1's first use took 47 s, packaged v2 (a changed helper) 136 ms right after. "A rebuilt helper paid it again" was the helper's first Vision call ever, since Vision arrived in that build.
 
 ## 2. Bind it and capture (host)
 
@@ -38,7 +38,7 @@ Settings > Shortcuts > Tools > Capture Text: record a key. Press it from another
 |---|---|
 | the overlay appears | the same overlay as Shot Area |
 | drag over a paragraph | toast "Text copied" with the first line; paste shows every line, breaks kept |
-| first use after a fresh `helper/build.sh` | "Reading text…" appears after ~1.5 s, then "Text copied" replaces it |
+| first use with a cold cache (§5's eviction, before the warm-up line) | "Reading text…" appears after ~1.5 s, then "Text copied" replaces it |
 | drag over empty desktop | toast "No text copied"; the clipboard still holds what it held before |
 | Esc on the overlay | no toast, clipboard unchanged |
 | press the key while the overlay is up | nothing (one overlay at a time) |
@@ -61,11 +61,11 @@ The ticket asks for notes. Try each and write down what came back wrong:
 - The toast's first line is readable, and a long one ends with "…".
 - Shot Area, Shot Window and the self-timer still work exactly as before (the overlay is shared with STC-569 and STC-570 too).
 
-## 5. First use after an update (VM, packaged app)
+## 5. First use on a new Mac (host, packaged app)
 
-`npm run app:package`, then a clean VM (`docs/VM-TESTING.md`), grant Screen Recording and Input Monitoring.
+**Not the VM:** a Tart guest has no Neural Engine, so Vision runs on the CPU/GPU there (1.3 s cold, 0.5 s after, measured 2026-11-10) and never shows the 45 s compile. The update case is settled (§1, STC-641); this section checks first use. On the host, clear the cache entry first by running any binary named `stc-helper` signed with another identifier, e.g. a copy re-signed with `codesign -f -s - -i com.example.evict`, then `npm run app:package` and launch the packaged app from a terminal.
 
-1. Launch. The terminal (or `log`) should show `[text] Vision warmed in N ms`. On a fresh binary N should be tens of seconds.
+1. Launch. The terminal should show `[text] Vision warmed in N ms`, with N tens of seconds.
 2. After that line, Capture Text over some text: it should answer in under a second.
 3. Relaunch: the warm-up line should now say well under a second.
 4. Capture Text **before** the warmed line appears: it should still answer, just slowly (inside 60 s), never "Couldn't capture text".
