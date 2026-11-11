@@ -10,7 +10,7 @@ import {
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
 import {
-  closeSettingsWindow, isSettingsWindow, notifySettingsWindow, openSettingsWindow, settingsWindowIsOpen,
+  closeSettingsWindow, isSettingsWindow, notifySettingsWindow, openSettingsWindow, sendToSettingsWindow, settingsWindowIsOpen,
 } from "./settings-window.js";
 import { installTray, type TrayHandle } from "./tray.js";
 import {
@@ -78,6 +78,7 @@ import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import {
   openOverlay, closeOverlay, overlayIsOpen, HIDE_SETTLE_MS, pushCameraPreviewFrame, noteCameraPreviewStopped,
 } from "./overlay-session.js";
+import { SettingsCameraPreview } from "./settings-camera-preview.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
 import { ensureWallpaper, startWallpaperRead } from "./record-wallpaper.js";
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
@@ -145,6 +146,20 @@ const HELPER = resolveHelperPath({
 
 let win: BrowserWindow | undefined;
 let sup: HelperSupervisor | undefined;
+// STC-638 slice 3: Settings > Camera's live view, on the helper's one preview (settings-camera-preview.ts).
+const settingsPreview = new SettingsCameraPreview({
+  port: {
+    start: async (uid) => { await sup!.startCameraPreview(uid); },
+    stop: async () => { await sup?.stopCameraPreview(); },
+  },
+  uid: () => readSettings(app.getPath("userData")).cameraDeviceUid,
+  blocked: () => !sup || sup.state !== "idle" || overlayIsOpen(),
+  onView: (view) => sendToSettingsWindow("settings:camera-preview", view),
+});
+ipcMain.on("settings:camera-preview-wanted", (e, on: unknown) => {
+  if (!isSettingsWindow(e.sender)) return;
+  settingsPreview.request(on === true);
+});
 // The message toast's ✕ (STC-412 final review, C1). `hideToast` is
 // idempotent and always acts on the one toast that is up, so this needs no
 // argument and cannot close the wrong window.
@@ -883,12 +898,16 @@ function startSupervisor(): void {
   sup.on("helper:camera-preview-frame", (l) => {
     const e = l as { w?: unknown; h?: unknown; jpeg?: unknown };
     if (typeof e.jpeg === "string" && typeof e.w === "number" && typeof e.h === "number") {
-      pushCameraPreviewFrame({ w: e.w, h: e.h, jpeg: e.jpeg });
+      // One preview runs at a time: the record bar's, when it is up, else Settings'.
+      if (overlayIsOpen()) pushCameraPreviewFrame({ w: e.w, h: e.h, jpeg: e.jpeg });
+      else if (settingsPreview.frame()) sendToSettingsWindow("settings:camera-frame", { w: e.w, h: e.h, jpeg: e.jpeg });
     }
   });
   sup.on("helper:camera-preview-stopped", (l) => {
     const e = l as { reason?: unknown };
-    if (typeof e.reason === "string") noteCameraPreviewStopped(e.reason);
+    if (typeof e.reason !== "string") return;
+    if (overlayIsOpen()) noteCameraPreviewStopped(e.reason);
+    else settingsPreview.stopped(e.reason);
   });
   // STC-528's `helper:level` goes to the pill's own window (`pill-window.ts`), not here.
   // STC-388: the tray's Record item reads as Stop while a take is live, and
@@ -1912,7 +1931,11 @@ async function runRecordFlow(source: RecordSource): Promise<RecordResult> {
     const stored = readSettings(app.getPath("userData"));
     const { mics, cameras } = await devicesForBar();
 
-    return await recordFlowBody(source, stored, mics, cameras, windows);
+    try {
+      return await recordFlowBody(source, stored, mics, cameras, windows);
+    } finally {
+      settingsPreview.resume();   // STC-638: the bar is gone; Settings' view may come back
+    }
   } catch (e: any) {
     // Adjacent to STC-468: this used to have no catch-all at all, unlike
     // `captureStill` above — a rejection anywhere in the flow (the overlay,
@@ -1967,6 +1990,8 @@ async function recordFlowBody(
   // STC-550: the library as Record found it, before the overlay can unhide it.
   const libraryAtFlowStart = libraryNow();
   keepHiddenLibraryHidden(libraryAtFlowStart);
+  // STC-638: the bar's own preview takes the helper; Settings' comes back after.
+  settingsPreview.suspend();
   const { outcome, options, afterClose } = await openOverlay({
     windows, mode: "region", purpose: "record",
     initialOptions: {
@@ -2274,7 +2299,10 @@ async function devicesForBar(): Promise<{ mics: MicInfo[]; cameras: DeviceLike[]
  * over (STC-551).
  */
 function openSettings(): void {
-  openSettingsWindow({ dist: here, rendererDir: join(here, "..", "renderer"), onClosed: reconcileIconsSoon });
+  openSettingsWindow({
+    dist: here, rendererDir: join(here, "..", "renderer"), onClosed: reconcileIconsSoon,
+    onWillClose: () => settingsPreview.close(),
+  });
   reconcileIcons();
   // An accessory app raises its window behind whatever is frontmost otherwise.
   app.focus({ steal: true });

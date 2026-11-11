@@ -27,6 +27,8 @@ export interface SettingsWindowOptions {
   rendererDir: string;
   /** Called once the window has closed, for main's own bookkeeping (the Dock). */
   onClosed(): void;
+  /** Called first thing when it closes, before its page is gone (the camera pane's preview stops). */
+  onWillClose?(): void;
 }
 
 export function openSettingsWindow(opts: SettingsWindowOptions): void {
@@ -57,6 +59,7 @@ export function openSettingsWindow(opts: SettingsWindowOptions): void {
   nativeTheme.on("updated", pushReduce);
   w.once("ready-to-show", () => w.show());
   w.on("closed", () => {
+    opts.onWillClose?.();
     nativeTheme.removeListener("updated", pushReduce);
     if (win === w) win = undefined;
     opts.onClosed();
@@ -82,4 +85,9 @@ export function isSettingsWindow(sender: WebContents): boolean {
 /** Tell the Settings window another window wrote a preference. */
 export function notifySettingsWindow(channel: "settings:changed"): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, undefined);
+}
+
+/** The camera pane's live view (STC-638): a frame or a view change, to the Settings page only. */
+export function sendToSettingsWindow(channel: "settings:camera-frame" | "settings:camera-preview", payload: unknown): void {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }

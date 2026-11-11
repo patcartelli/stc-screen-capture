@@ -21,6 +21,7 @@ import {
   editPipStyle, pipRect, pipSize, snapCenter, PIP_SNAP_THRESHOLD_SCREEN_PX, PIP_SHADOW,
   PIP_RADIUS_MAX, PIP_WIDTH_MIN, PIP_WIDTH_MAX, type PipEdit, type PipStyle,
 } from "@transform/pip-style.js";
+import { previewLine, type PreviewView } from "./camera-preview.js";
 import type { ToastInput } from "./toast-message.js";
 import { buildDropdown } from "./settings-dropdown.js";
 import { WINDOW_SHOT_LOOKS, type WindowShotLook } from "./window-look.js";
@@ -49,6 +50,7 @@ declare const settingsBridge: {
   resolvedSaveFolder(): Promise<string>;
   reclaimSpace(): Promise<unknown>;
   showToast(message: ToastInput): void;
+  setCameraPreviewWanted(on: boolean): void;
   on(event: string, cb: (p: any) => void): () => void;
 };
 
@@ -78,6 +80,9 @@ const PANE_TITLES: Record<Pane, string> = {
 };
 const isPane = (v: unknown): v is Pane => typeof v === "string" && (PANES as readonly string[]).includes(v);
 
+/** Set by the Camera pane's live view below (STC-638); declared here because the first `showPane` runs before it. */
+let onPaneShown: (pane: Pane) => void = () => {};
+
 function showPane(pane: Pane): void {
   for (const p of PANES) $(`pane-${p}`).hidden = p !== pane;
   for (const b of document.querySelectorAll<HTMLButtonElement>("#sidebar button")) {
@@ -91,6 +96,7 @@ function showPane(pane: Pane): void {
   document.title = `${PANE_TITLES[pane]} – Settings`;
   $("panes").scrollTop = 0;
   if (pane === "camera") drawPip();
+  onPaneShown(pane);
 }
 for (const b of document.querySelectorAll<HTMLButtonElement>("#sidebar button")) {
   b.addEventListener("click", () => { if (isPane(b.dataset.pane)) showPane(b.dataset.pane); });
@@ -338,8 +344,55 @@ function drawPip(): void {
     boxShadow: s.shadow
       ? `0 ${PIP_SHADOW.offsetYFraction * short * k}px ${PIP_SHADOW.blurFraction * short * k}px ${PIP_SHADOW.color}` : "none",
   });
-  (pipBox.firstElementChild as HTMLElement).style.transform = s.mirror ? "scaleX(-1)" : "";
+  for (const child of Array.from(pipBox.children) as HTMLElement[]) child.style.transform = s.mirror ? "scaleX(-1)" : "";
 }
+
+// ---- The live view (STC-638) ---------------------------------------------------
+//
+// The silhouette is replaced by the real camera while the Camera pane is
+// being looked at. Main owns when it runs (`settings-camera-preview.ts`); this
+// only says whether the pane is shown and focused, and draws what arrives.
+// A camera that cannot show says why in the box's tooltip, never a raw code.
+const pipCanvas = $("pipcanvas") as HTMLCanvasElement;
+const pipSilhouette = pipBox.querySelector<HTMLElement>(".silhouette")!;
+let cameraPaneShown = false;
+let previewKind: PreviewView["kind"] = "off";
+
+onPaneShown = (pane) => { cameraPaneShown = pane === "camera"; sendPreviewWanted(); };
+
+function sendPreviewWanted(): void {
+  bridge.setCameraPreviewWanted(cameraPaneShown && document.hasFocus());
+}
+window.addEventListener("focus", sendPreviewWanted);
+window.addEventListener("blur", sendPreviewWanted);
+
+function drawPreviewFrame(bitmap: ImageBitmap): void {
+  // Cover-fit into the box, like the PiP itself does with the camera's picture.
+  const w = pipBox.clientWidth, h = pipBox.clientHeight;
+  if (!w || !h) return;
+  if (pipCanvas.width !== w || pipCanvas.height !== h) { pipCanvas.width = w; pipCanvas.height = h; }
+  const g = pipCanvas.getContext("2d");
+  if (!g) return;
+  const scale = Math.max(w / bitmap.width, h / bitmap.height);
+  const dw = bitmap.width * scale, dh = bitmap.height * scale;
+  g.drawImage(bitmap, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+bridge.on("settings:camera-preview", (view: PreviewView) => {
+  previewKind = view.kind;
+  const live = view.kind === "live";
+  pipCanvas.hidden = !live;
+  pipSilhouette.hidden = live;
+  if (!live) pipCanvas.getContext("2d")?.clearRect(0, 0, pipCanvas.width, pipCanvas.height);
+  const line = previewLine(view);
+  pipBox.title = line;
+  pipBox.setAttribute("aria-label", line ? `Camera position. ${line}` : "Camera position");
+});
+bridge.on("settings:camera-frame", (f: { jpeg: string }) => {
+  if (previewKind === "off") return;
+  const bytes = Uint8Array.from(atob(f.jpeg), (c) => c.charCodeAt(0));
+  void createImageBitmap(new Blob([bytes], { type: "image/jpeg" })).then((b) => { drawPreviewFrame(b); b.close(); }, () => {});
+});
 
 /** live = repaint only (a slider mid-drag); commit = persist, then show what was stored. */
 async function editPip(edit: PipEdit, phase: "live" | "commit"): Promise<void> {
