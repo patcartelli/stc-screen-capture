@@ -493,6 +493,14 @@ process.stdin.on("data", (chunk) => {
       case "camera-release":
         send("camera-released", { seq });
         break;
+      // STC-638: the live camera view. There is no camera here, so a preview is refused the
+      // way a machine with none refuses it, and a stop always answers (wasRunning false).
+      case "camera-preview-start":
+        send("error", { seq, code: "camera-no-device" });
+        break;
+      case "camera-preview-stop":
+        send("camera-preview-stopped", { seq, reason: "stopped", wasRunning: false });
+        break;
       // STC-572: main warms Vision whenever a helper comes up. Nothing to warm here.
       case "warm-text":
         send("text-warmed", { seq, ms: 0 });

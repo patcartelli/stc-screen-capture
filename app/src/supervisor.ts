@@ -202,6 +202,26 @@ export class HelperSupervisor {
     return this.client.request("camera-release", {}, { timeoutMs: 5_000 });
   }
 
+  /**
+   * A live camera view (STC-638): the helper starts sending `camera-preview-frame`
+   * lines on the lossy channel, which arrive here as `helper:camera-preview-frame`.
+   * Answers `camera-preview-started` once the camera RUNS (a cold open can take
+   * seconds, hence the long bound); the first picture is a later event. Rejects
+   * with the helper's code: no Camera grant, no such camera, or a take running.
+   */
+  async startCameraPreview(deviceUid?: string | null): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    const params: Record<string, unknown> = {};
+    if (deviceUid != null) params.deviceUid = deviceUid;
+    return this.client.request("camera-preview-start", params, { timeoutMs: 20_000 });
+  }
+
+  /** Stop the live view. Always answers; stopping nothing is not an error. */
+  async stopCameraPreview(): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("camera-preview-stop", {}, { timeoutMs: 5_000 });
+  }
+
   /** The file paths on the pasteboard right now: the copy purge's one check. */
   async pasteboardFiles(): Promise<HelperLine> {
     if (!this.client) throw new Error("helper is not running");

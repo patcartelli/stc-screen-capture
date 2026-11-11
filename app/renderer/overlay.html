@@ -167,6 +167,14 @@
   #ctl-record .label { flex: 1; }
   #ctl-record .kbd { display: flex; opacity: .56; }
   #menu { cursor: default; }
+  /* STC-638: the camera menu's live view. 264 x 148 inside the menu's 8 px inset;
+     camera-preview.ts's PREVIEW_* constants are these numbers (menuHeight counts them). */
+  .campreview { position: relative; width: 264px; height: 148px; margin: 8px 8px 4px; border-radius: 10px;
+                overflow: hidden; background: var(--surface-deep); }
+  .campreview canvas { display: block; width: 264px; height: 148px; }
+  .campreview .note { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                      text-align: center; padding: 0 16px; color: var(--text-dim); font: 400 13px/1.3 var(--font-sans); }
+  .campreview .note[hidden] { display: none; }
   #menu .row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
   /* Reduced motion (STC-506): Expand's glide becomes a short fade of the
      marquee, not a jump. overlay.ts skips the geometry animation under this
