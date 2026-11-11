@@ -75,7 +75,9 @@ import { reclaimPrompt, reclaimResult } from "./reclaim.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
          recordingDurationMs, recordingScopeLabel, GIF_EXTENSION, GIF_PROBE_MAX_BYTES } from "./library.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
-import { openOverlay, closeOverlay, overlayIsOpen, HIDE_SETTLE_MS } from "./overlay-session.js";
+import {
+  openOverlay, closeOverlay, overlayIsOpen, HIDE_SETTLE_MS, pushCameraPreviewFrame, noteCameraPreviewStopped,
+} from "./overlay-session.js";
 import { cancelCountdown, countdownIsOpen, runCountdown } from "./countdown-window.js";
 import { ensureWallpaper, startWallpaperRead } from "./record-wallpaper.js";
 import { clampCountdownMs, countdownFired, needsCountdown } from "./countdown.js";
@@ -874,6 +876,19 @@ function startSupervisor(): void {
     const e = l as any;
     const lag = typeof e.displayFirstFrameMs === "number" ? e.firstSampleMs - e.displayFirstFrameMs : "?";
     console.log(`[${e.track}] first sample at ${e.firstSampleMs} ms, screen first frame at ${e.displayFirstFrameMs ?? "?"} ms, lag ${lag} ms, ${JSON.stringify(e.timings ?? {})}`);
+  });
+  // STC-638: the camera menu's live view. Frames are the lossy channel's (a dropped
+  // one is fine), and an unsolicited stop is the helper's own (timeout, unplugged,
+  // a take starting); the reply to OUR stop carries a seq and never reaches here.
+  sup.on("helper:camera-preview-frame", (l) => {
+    const e = l as { w?: unknown; h?: unknown; jpeg?: unknown };
+    if (typeof e.jpeg === "string" && typeof e.w === "number" && typeof e.h === "number") {
+      pushCameraPreviewFrame({ w: e.w, h: e.h, jpeg: e.jpeg });
+    }
+  });
+  sup.on("helper:camera-preview-stopped", (l) => {
+    const e = l as { reason?: unknown };
+    if (typeof e.reason === "string") noteCameraPreviewStopped(e.reason);
   });
   // STC-528's `helper:level` goes to the pill's own window (`pill-window.ts`), not here.
   // STC-388: the tray's Record item reads as Stop while a take is live, and
@@ -1959,6 +1974,16 @@ async function recordFlowBody(
       systemAudio: stored.systemAudio, keys: stored.recordKeys, cameraDeviceUid: stored.cameraDeviceUid, cameras,
       showClicks: stored.showClicks,
     },
+    // STC-638: the camera menu's live view, from the helper (`CameraPreview.swift`). The
+    // sticky framing-guides setting draws the thirds on it, and the PiP default's mirror
+    // flips it the way the PiP will be.
+    cameraPreview: sup ? {
+      port: {
+        start: async (uid) => { await sup!.startCameraPreview(uid); },
+        stop: async () => { await sup!.stopCameraPreview(); },
+      },
+      guides: stored.framingGuides, mirror: stored.pipStyle.mirror,
+    } : undefined,
     dist: here, renderer: join(here, "..", "renderer"),
   });
   // The bar's own Settings control (STC-456): closes the overlay with no

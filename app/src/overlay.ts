@@ -11,6 +11,9 @@ import type { MenuRow } from "./device-picker.js";
 import { iconSvg, type Glyph } from "./icons.js";
 import { buildMenuRow } from "./device-menu-dom.js";
 import { legendItems } from "./legend.js";
+import {
+  previewLine, thirdsLines, PREVIEW_TILE_HEIGHT, PREVIEW_TILE_WIDTH, type PreviewView,
+} from "./camera-preview.js";
 
 /**
  * The overlay's view (STC-290). It draws state and reports input; it decides
@@ -29,6 +32,7 @@ declare global {
     overlay: {
       send(event: unknown): void;
       onState(cb: (payload: OverlayPayload) => void): () => void;
+      onCameraFrame(cb: (f: { w: number; h: number; jpeg: string }) => void): () => void;
     };
   }
 }
@@ -55,6 +59,8 @@ interface OverlayPayload {
   anchor?: Rect;
   /** STC-456 — the open device menu: where it opens and what it lists. */
   menu?: { anchor: MenuAnchor; rows: MenuRow[] };
+  /** STC-638 — the camera menu's live view; present only while that menu is open. */
+  cameraPreview?: { view: PreviewView; guides: boolean; mirror: boolean };
 }
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -247,8 +253,85 @@ function renderBar(p: OverlayPayload): void {
   // The trigger's glyph follows the state: mic-off when muted, camera-off when off.
   setLeadingGlyph(ctl("mic"), micOn ? "mic" : "mic-off");
   setLeadingGlyph(ctl("camera"), p.options.camera ? "camera" : "camera-off");
-  renderMenu(p.menu);
+  renderMenu(p.menu, p.cameraPreview);
 }
+
+// STC-638: the camera menu's live view. The tile, its canvas and the one-line note
+// are built once; frames draw into the canvas and the note says why there is no
+// picture. `aria-hidden`: a picture of yourself carries nothing for a screen
+// reader; the note is what is announced (role=status).
+const previewTile = document.createElement("div");
+previewTile.className = "campreview";
+const previewCanvas = document.createElement("canvas");
+const previewNote = document.createElement("div");
+previewNote.className = "note";
+previewNote.setAttribute("role", "status");
+previewTile.append(previewCanvas, previewNote);
+const PREVIEW_DPR = Math.max(1, Math.round(window.devicePixelRatio || 1));
+previewCanvas.width = PREVIEW_TILE_WIDTH * PREVIEW_DPR;
+previewCanvas.height = PREVIEW_TILE_HEIGHT * PREVIEW_DPR;
+previewCanvas.setAttribute("aria-hidden", "true");
+let previewGuides = false, previewMirror = false;
+/** The last decoded picture, kept so a guides/mirror change redraws without a new frame. */
+let previewBitmap: ImageBitmap | undefined;
+
+function drawPreviewState(c: { view: PreviewView; guides: boolean; mirror: boolean }): void {
+  const changed = previewGuides !== c.guides || previewMirror !== c.mirror;
+  previewGuides = c.guides; previewMirror = c.mirror;
+  const showing = c.view.kind === "live";
+  previewNote.textContent = previewLine(c.view);
+  previewNote.hidden = showing;
+  previewCanvas.style.visibility = showing ? "visible" : "hidden";
+  // A view that is not live drops its last picture: a stale face under "Starting…" is a lie.
+  if (!showing) { previewBitmap?.close(); previewBitmap = undefined; }
+  else if (changed) paintPreview();
+}
+
+/** Cover-fit the newest picture into the tile, mirrored if the PiP is, with thirds on top. */
+function paintPreview(): void {
+  const ctx = previewCanvas.getContext("2d");
+  if (!ctx) return;
+  const cw = previewCanvas.width, ch = previewCanvas.height;
+  ctx.clearRect(0, 0, cw, ch);
+  const b = previewBitmap;
+  if (b) {
+    const s = Math.max(cw / b.width, ch / b.height);
+    const dw = b.width * s, dh = b.height * s;
+    ctx.save();
+    if (previewMirror) { ctx.translate(cw, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(b, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+    ctx.restore();
+  }
+  if (previewGuides) {
+    // Each line twice, a dark one under a light one, so the guides hold their
+    // contrast over a dark room and a white wall alike (STC-497's 3:1).
+    const lines = thirdsLines(cw, ch);
+    for (const [color, width] of [["rgba(0,0,0,.65)", 3 * PREVIEW_DPR], ["rgba(255,255,255,.9)", 1 * PREVIEW_DPR]] as const) {
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      ctx.beginPath();
+      for (const l of lines) { ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2); }
+      ctx.stroke();
+    }
+  }
+}
+
+window.overlay.onCameraFrame((f) => {
+  // Lossy by design: only the newest picture matters, and a decode that finishes
+  // after a newer one is dropped.
+  const seq = ++previewFrameSeq;
+  try {
+    const bin = atob(f.jpeg);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    void createImageBitmap(new Blob([bytes], { type: "image/jpeg" })).then((bmp) => {
+      if (seq !== previewFrameSeq) { bmp.close(); return; }
+      previewBitmap?.close();
+      previewBitmap = bmp;
+      paintPreview();
+    }).catch(() => {});
+  } catch { /* a corrupt frame is one dropped frame */ }
+});
+let previewFrameSeq = 0;
 
 /** The signature of the last row set actually drawn into `#menu`, so a
  * broadcast that changed nothing about the ROWS (every pointermove sends
@@ -275,8 +358,10 @@ const menuRowsSignature = (rows: MenuRow[]): string =>
  * move (a marquee edit while the menu happens to be open) independently of
  * the rows.
  */
-function renderMenu(m: { anchor: MenuAnchor; rows: MenuRow[] } | undefined): void {
+function renderMenu(m: { anchor: MenuAnchor; rows: MenuRow[] } | undefined,
+                    cam?: { view: PreviewView; guides: boolean; mirror: boolean }): void {
   if (!m) {
+    previewTile.remove();
     // Closed with focus inside it: hand focus back to the trigger rather than
     // letting it fall to <body>, where the next Return would mean Capture.
     const hadFocus = menuEl.contains(document.activeElement);
@@ -297,6 +382,15 @@ function renderMenu(m: { anchor: MenuAnchor; rows: MenuRow[] } | undefined): voi
       return row;
     }));
     lastMenuRowsSignature = signature;
+  }
+  // STC-638: the camera menu's live view is the menu's first child. It is one
+  // persistent node (the canvas keeps its picture across a row rebuild), put back
+  // whenever the rows were replaced and taken out when this is not the camera menu.
+  if (cam) {
+    if (menuEl.firstChild !== previewTile) menuEl.prepend(previewTile);
+    drawPreviewState(cam);
+  } else {
+    previewTile.remove();
   }
   const wasHidden = menuEl.hidden;
   menuEl.hidden = false;

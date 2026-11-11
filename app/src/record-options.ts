@@ -93,8 +93,8 @@ export const MENU_GAP = 4;
  */
 export const MENU_ROW_HEIGHT = 44;
 export const MENU_VERTICAL_PADDING = 8; // 4px top + 4px bottom
-export function menuHeight(rowCount: number): number {
-  return rowCount * MENU_ROW_HEIGHT + MENU_VERTICAL_PADDING;
+export function menuHeight(rowCount: number, extra = 0): number {
+  return rowCount * MENU_ROW_HEIGHT + MENU_VERTICAL_PADDING + extra;
 }
 
 /** The whole block the placement rules move: pane + gap + capture button. */
@@ -269,11 +269,12 @@ export interface MenuAnchor { menu: MenuId; x: number; y: number; side: "below" 
  * rendered width.
  */
 export function menuAnchor(layout: BarLayout, menu: MenuId, display: DisplayInfo,
-                           rowCount: number): MenuAnchor {
+                           rowCount: number, extraHeight = 0): MenuAnchor {
   const trig = layout.controls.find((c) => c.id === menu)!.rect;
   const b = display.bounds;
   const below = trig.y + trig.height + MENU_GAP;
-  if (below + menuHeight(rowCount) <= b.y + b.height - BAR_MARGIN) {
+  // `extraHeight`: the camera menu's live-view tile (STC-638), which sits inside the menu.
+  if (below + menuHeight(rowCount, extraHeight) <= b.y + b.height - BAR_MARGIN) {
     return { menu, side: "below", x: trig.x, y: below };
   }
   return { menu, side: "above", x: trig.x, y: trig.y - MENU_GAP };

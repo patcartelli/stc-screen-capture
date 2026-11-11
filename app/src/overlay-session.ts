@@ -15,6 +15,7 @@ import {
   type MenuPick, type MenuRow,
 } from "./device-picker.js";
 import { micDevices } from "./mic-devices.js";
+import { PreviewController, previewWanted, PREVIEW_EXTRA_HEIGHT, type PreviewPort } from "./camera-preview.js";
 
 /**
  * The selection overlay's windows and lifecycle (STC-290).
@@ -306,6 +307,13 @@ export interface OpenOptions {
    */
   initialOptions?: Pick<OptionsState, "micDeviceUid" | "camera" | "mics">
     & Partial<Pick<OptionsState, "systemAudio" | "keys" | "cameraDeviceUid" | "cameras" | "showClicks">>;
+  /**
+   * The live camera view in the camera menu (STC-638). `port` is the helper's
+   * start/stop; `guides` is the sticky `framingGuides` setting, which draws the
+   * rule-of-thirds lines on the view; `mirror` is the PiP default's, so the view looks
+   * the way the PiP will. Absent = no view (the shot overlays, tests).
+   */
+  cameraPreview?: { port: PreviewPort; guides: boolean; mirror: boolean };
 }
 
 /**
@@ -340,6 +348,16 @@ export async function closeOverlay(): Promise<void> {
   await active?.cancel();
 }
 
+/** A camera-preview frame from the helper (STC-638): to the overlay's tile, or nowhere. */
+export function pushCameraPreviewFrame(f: { w: number; h: number; jpeg: string }): void {
+  active?.pushPreviewFrame(f);
+}
+
+/** The helper ended the preview on its own (`camera-preview-stopped`, STC-638). */
+export function noteCameraPreviewStopped(reason: string): void {
+  active?.notePreviewStopped(reason);
+}
+
 class OverlaySession {
   private readonly windows: BrowserWindow[] = [];
   /**
@@ -361,8 +379,13 @@ class OverlaySession {
    * cancellation, but the caller should open the profile sheet rather than
    * treat it as a plain Escape. */
   private afterClose: "settings" | undefined;
+  /** The camera menu's live view (STC-638); undefined when this overlay has none. */
+  private readonly preview: PreviewController | undefined;
 
   constructor(private readonly opts: OpenOptions) {
+    // A change of the view only redraws; `broadcast` is what also syncs the helper,
+    // so a view change cannot re-enter it.
+    this.preview = opts.cameraPreview ? new PreviewController(opts.cameraPreview.port, () => this.pushAll()) : undefined;
     this.state = initialState(opts.mode ?? "region");
     this.ctx = { displays: screen.getAllDisplays().map(toDisplayInfo), windows: opts.windows,
                  regionOnly: opts.regionOnly };
@@ -545,12 +568,38 @@ class OverlaySession {
         const rows = this.options.openMenu === "mic"
           ? micMenuRows(micDevices(this.options.mics), this.options)
           : cameraMenuRows([...this.options.cameras], this.options);
-        return { anchor: menuAnchor(layout, this.options.openMenu, d, rows.length), rows };
+        const extra = this.options.openMenu === "camera" && this.preview ? PREVIEW_EXTRA_HEIGHT : 0;
+        return { anchor: menuAnchor(layout, this.options.openMenu, d, rows.length, extra), rows };
       })(),
+      // STC-638: the camera menu's live view. Present only while that menu is open.
+      cameraPreview: this.preview && this.options.openMenu === "camera"
+        ? { view: this.preview.view, guides: this.opts.cameraPreview!.guides, mirror: this.opts.cameraPreview!.mirror }
+        : undefined,
     });
   }
 
-  private broadcast(): void { for (const w of this.windows) this.push(w); }
+  /** Every state change comes through here: match the helper's preview to the
+   * menu first (STC-638), then draw. */
+  private broadcast(): void {
+    this.preview?.sync(previewWanted(this.options));
+    this.pushAll();
+  }
+
+  private pushAll(): void { for (const w of this.windows) this.push(w); }
+
+  /** A picture for the camera menu's tile. Dropped when no preview is wanted
+   * any more (a frame that outlived its stop). */
+  pushPreviewFrame(f: { w: number; h: number; jpeg: string }): void {
+    if (this.done || !this.preview?.frame()) return;
+    for (const w of this.windows) if (!w.isDestroyed()) w.webContents.send("overlay:camera-frame", f);
+  }
+
+  /** The helper ended the preview itself. Re-syncs, so a menu still open restarts it. */
+  notePreviewStopped(reason: string): void {
+    if (this.done || !this.preview) return;
+    this.preview.stopped(reason);
+    this.broadcast();
+  }
 
   private onEvent = (_e: unknown, ev: OverlayEvent): void => {
     if (this.done) return;
@@ -766,6 +815,8 @@ class OverlaySession {
   private async finish(outcome: SelectionOutcome): Promise<void> {
     if (this.done) return;
     this.done = true;
+    // STC-638: the light goes off the moment the overlay is leaving.
+    this.preview?.close();
     ipcMain.removeListener("overlay:event", this.onEvent);
     screen.removeListener("display-added", this.onDisplaysChanged);
     screen.removeListener("display-removed", this.onDisplaysChanged);

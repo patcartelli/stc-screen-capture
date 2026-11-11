@@ -217,6 +217,26 @@ describe("reliable channel — fd3, request/response with sequence numbers", () 
     expect(r.ev).toBe("camera-released");
   });
 
+  test("camera-preview-start for a camera that is not there errors reliably and opens nothing; camera-preview-stop always answers (STC-638)", async () => {
+    // Same shape as camera-warm's test: a uid no device has is refused as
+    // not-authorized (CI, no grant) or not-found (a Mac with it), a session is
+    // never opened, so the LED stays off on every `npm test` run. Stopping a
+    // preview that is not running is not an error.
+    const h = spawnHelper();
+    await waitFor(() => find(h.fd3, "ready"));
+    h.send({ cmd: "camera-preview-start", deviceUid: "no-such-camera", seq: 40 });
+    const s = await waitFor(() => h.fd3.find((l) => l.seq === 40), 8000, "camera-preview-start reply");
+    expect(s.ev).toBe("error");
+    expect(["camera-not-authorized", "camera-not-found"]).toContain(s.code);
+    h.send({ cmd: "camera-preview-stop", seq: 41 });
+    const r = await waitFor(() => h.fd3.find((l) => l.seq === 41), 5000, "camera-preview-stop reply");
+    expect(r.ev).toBe("camera-preview-stopped");
+    expect(r.reason).toBe("stopped");
+    expect(r.wasRunning).toBe(false);
+    // And no frame ever went out for it.
+    expect(h.fd3.some((l) => l.ev === "camera-preview-frame")).toBe(false);
+  });
+
   test("malformed JSON produces a reliable error without wedging the stream", async () => {
     const h = spawnHelper();
     await waitFor(() => find(h.fd3, "ready"));
