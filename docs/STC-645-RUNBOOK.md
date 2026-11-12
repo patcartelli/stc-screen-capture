@@ -1,6 +1,6 @@
 # STC-645 runbook — shortcut defaults follow macOS
 
-Run from `accounts/stc-645-shortcut-defaults-follow-the-macos` (not on `master` yet). Unit tests pass on the Mac;
+Run from `accounts/stc-645-shortcut-defaults-follow-the-macos` (not on `master` yet). Passed on the Mac 2026-11-12 (all checks). Unit tests pass;
 the e2e edits run on CI only.
 
 What changed: defaults are ⇧⌘4 area, ⇧⌘2 window, ⇧⌘3 full display, ⇧⌘5 record, ⇧⌘7 self-timer. ⌃ adds the
