@@ -26,3 +26,13 @@ Start a recording (hotkey or menu bar), draw an area, open the options bar. Answ
 10. Camera access off in System Settings: the menu says "Camera access is off", and the camera never lights. Yes / no
 11. Unplug a USB camera with its menu open: "Camera disconnected". Yes / no
 12. On a display whose bottom is close, the taller menu flips above the bar and stays on screen. Yes / no
+
+**Settings > Camera (slice 3)**
+
+Run from `accounts/stc-638-settings-camera-live-view` (not on `master` yet): `helper/build.sh && npm run app:start`, then open Settings > Camera.
+
+13. The little camera box on the sample screen shows **you**, not a silhouette, about 3 s after you open the pane (a USB camera). Yes / no
+14. Switch to another pane (or click another app): the picture goes and the camera's light goes off. Come back: it returns. Yes / no
+15. Drag the box, change Shape, Size, Mirror: the picture follows and stays cropped to the shape. Yes / no
+16. Open the record bar (hotkey) with Settings still open: the bar's camera menu still shows its own picture. Close the bar: Settings' picture comes back. Yes / no
+17. Camera access off in System Settings: the box keeps its silhouette, and hovering it says "Camera access is off". Yes / no

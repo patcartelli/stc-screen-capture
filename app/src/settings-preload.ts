@@ -17,12 +17,14 @@ contextBridge.exposeInMainWorld("settingsBridge", {
   chooseShareDestination: () => ipcRenderer.invoke("share:chooseDestination"),
   resolvedSaveFolder: () => ipcRenderer.invoke("recorder:resolvedSaveFolder"),
   reclaimSpace: () => ipcRenderer.invoke("recorder:reclaimSpace"),
+  /** STC-638: the Camera pane is (not) being looked at, so its live view should (not) run. */
+  setCameraPreviewWanted: (on: boolean) => ipcRenderer.send("settings:camera-preview-wanted", on === true),
   showToast: (message: unknown) => ipcRenderer.send("toast:message", message),
   on: (event: string, cb: (payload: any) => void) => {
     // settings:changed: another window wrote a preference (the editor's "Use
     // as default", the record bar). settings:reduced-transparency: the
     // macOS setting, read by main from nativeTheme.
-    const channels = ["settings:changed", "settings:reduced-transparency"];
+    const channels = ["settings:changed", "settings:reduced-transparency", "settings:camera-frame", "settings:camera-preview"];
     if (!channels.includes(event)) throw new Error(`unknown channel: ${event}`);
     const listener = (_e: unknown, payload: any) => cb(payload);
     ipcRenderer.on(event, listener);
