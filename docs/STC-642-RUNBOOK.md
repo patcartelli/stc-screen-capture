@@ -10,6 +10,7 @@ helper/build.sh && npm run app:start
 Open Settings > Camera with a camera connected. Answer yes or no.
 
 **Framing in Settings**
+0. Scroll down to Framing and Style: the preview stays pinned at the top, and rows fade out under it. Yes / no
 1. Once the picture shows, **Reframe** and **Zoom** become usable (before it, both are greyed). Yes / no
 2. Drag **Zoom** to about 2×: the picture in the PiP gets closer, and the readout says `2.0×`. Yes / no
 3. Press **Reframe**: the PiP gets a ring and the note under the preview changes. Yes / no

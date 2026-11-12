@@ -197,7 +197,20 @@
     .keycap.listening { border-color: var(--on); color: var(--on); }
     .footer { display: flex; justify-content: flex-end; }
 
-    /* Camera preview: a sample screen with the default PiP drawn on it. */
+    /* Camera preview: a sample screen with the default PiP drawn on it.
+       It stays in view under the title bar while the pane scrolls (STC-642),
+       so a Shape, Framing or Style change below is always seen as it is made.
+       Opaque, and its bottom padding (cancelled by the margin) covers the
+       section gap, so rows scroll under it rather than through it. */
+    #pippreview {
+      position: sticky; top: 64px; z-index: 1; background: var(--win);
+      padding-bottom: 16px; margin-bottom: -16px;
+    }
+    /* A short fade below it, so a row passing under reads as scrolling, not as cut. */
+    #pippreview::after {
+      content: ""; position: absolute; left: 0; right: 0; bottom: -12px; height: 12px; pointer-events: none;
+      background: linear-gradient(var(--win), transparent);
+    }
     #pipstage {
       position: relative; height: 150px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .08);
       background: rgba(255, 255, 255, .03);
@@ -305,7 +318,7 @@
     <!-- ---- Camera ----------------------------------------------------- -->
     <section class="pane" id="pane-camera" aria-labelledby="h-camera" hidden>
       <h1 id="h-camera" hidden>Camera</h1>
-      <div class="section">
+      <div class="section" id="pippreview">
         <h2>Preview</h2>
         <div id="pipstage"><div id="pipscreen">
           <div class="faux" aria-hidden="true"></div>
