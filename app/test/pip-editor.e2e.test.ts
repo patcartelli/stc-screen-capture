@@ -154,6 +154,47 @@ describe("the editor's Camera section (STC-461, STC-604)", () => {
     await expect.poll(() => readJson(userData, "settings.json").framingGuides, { timeout: 10_000 }).toBe(true);
   }, 120_000);
 
+  test("reframe: stays on Camera with the pane locked, and Done unlocks it (STC-643)", async () => {
+    const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ pip: true });
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await editorWin.click("#pipbtn");
+    await openMore(editorWin, "pippanel");
+    await editorWin.click('[data-pip-preset="circle"]');
+    await expect.poll(() => savedPip(takeDir)?.style?.shape, { timeout: 10_000 }).toBe("circle");
+    await editorWin.click("#pipreframe");
+    await editorWin.locator("#pipframebar").waitFor({ state: "visible", timeout: 10_000 });
+    // Still the Camera section: it used to jump to Frame here.
+    expect(await editorWin.getAttribute("#pipbtn", "aria-selected")).toBe("true");
+    expect(await editorWin.isVisible("#pippanel")).toBe(true);
+    expect(await editorWin.isHidden("#framepanel")).toBe(true);
+    // Locked, so nothing in it can write the real style over the temporary display one.
+    expect(await editorWin.evaluate(() => (document.getElementById("pippanel") as HTMLElement).inert)).toBe(true);
+    // The keyboard is not left on a control that just went inert.
+    expect(await editorWin.evaluate(() => !!document.activeElement?.closest("#pippanel"))).toBe(false);
+    await editorWin.fill("#pipzoom", "2");
+    await editorWin.dispatchEvent("#pipzoom", "change");
+    await editorWin.click("#pipframedone");
+    await expect.poll(() => savedPip(takeDir)?.style?.framing?.zoom, { timeout: 10_000 }).toBe(2);
+    expect(savedPip(takeDir).style.width).not.toBe(0.5);   // the temporary display style never leaked
+    expect(await editorWin.evaluate(() => (document.getElementById("pippanel") as HTMLElement).inert)).toBe(false);
+    expect(await editorWin.getAttribute("#pipbtn", "aria-selected")).toBe("true");
+  }, 120_000);
+
+  test("reframe: Escape ends it and unlocks the Camera pane (STC-643)", async () => {
+    const { app: a, editorWin } = await launchWithTakeInEditor({ pip: true });
+    app = a;
+    await expect.poll(() => inkiness(editorWin), { timeout: 30_000 }).toBeGreaterThan(0.2);
+    await editorWin.click("#pipbtn");
+    await openMore(editorWin, "pippanel");
+    await editorWin.click("#pipreframe");
+    await editorWin.locator("#pipframebar").waitFor({ state: "visible", timeout: 10_000 });
+    await editorWin.keyboard.press("Escape");
+    await editorWin.locator("#pipframebar").waitFor({ state: "hidden", timeout: 10_000 });
+    expect(await editorWin.evaluate(() => (document.getElementById("pippanel") as HTMLElement).inert)).toBe(false);
+    expect(await editorWin.isVisible("#pippanel")).toBe(true);
+  }, 120_000);
+
   test("reframe: leaving the page mid-reframe commits it rather than dropping it", async () => {
     const { app: a, editorWin, takeDir } = await launchWithTakeInEditor({ pip: true });
     app = a;

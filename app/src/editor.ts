@@ -3102,11 +3102,17 @@ function enterReframe(): void {
   const real = currentPipStyle();
   if (!real) return;
   reframing = { real, before: openProject.pip.style };
-  if (pipPanelOpen()) selectSection("frame");
+  // STC-643: the person stays on Camera (this used to switch to Frame). The
+  // pane is locked instead, so none of its controls can write the real style
+  // over the temporary display one; exitReframe unlocks it.
+  const hadFocus = !!document.activeElement?.closest("#pippanel");
+  lockPipPanel(true);
   openProject.pip.style = displayStyleFor(real); // LIVE project only — persistProject writes reframedProject meanwhile
   $("pipoverlay").hidden = true;
   $("pipframing").hidden = false;
   $("pipframebar").hidden = false;
+  // The Reframe button just went inert: hand the keyboard to the reframe's own controls.
+  if (hadFocus) ($("pipzoom") as HTMLInputElement).focus();
   void player.seek(player.currentNs);
   layoutFramingWindow();
 }
@@ -3125,8 +3131,12 @@ function exitReframe(commit: boolean): Promise<void> {
   const { real, before } = reframing;
   reframing = null;
   frameDrag = null;
+  const barHadFocus = !!document.activeElement?.closest("#pipframebar");
   $("pipframing").hidden = true;
   $("pipframebar").hidden = true;
+  lockPipPanel(false);
+  // The bar is gone: give the keyboard back to Reframe if the pane is showing.
+  if (barHadFocus && pipPanelOpen()) document.getElementById("pipreframe")?.focus();
   if (!openProject?.pip) return Promise.resolve();
   if (!commit) { openProject.pip.style = before; return Promise.resolve(); }
   const committed = committedReframeStyle({ real, before });
@@ -3158,6 +3168,11 @@ function reframedProject(p: Project, r: { real: PipStyle; before: PipStyle | und
   const { style: _display, ...pip } = p.pip;
   const style = committedReframeStyle(r);
   return { ...p, pip: style === undefined ? pip : { ...pip, style } };
+}
+
+/** The Camera pane while a reframe is open (STC-643): inert, and dimmed by CSS on [inert]. */
+function lockPipPanel(locked: boolean): void {
+  ($("pippanel") as HTMLElement).inert = locked;
 }
 
 /** Fire-and-report form, for the UI's own ways out of reframe. */
