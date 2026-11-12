@@ -231,6 +231,8 @@
        colour; STC-609 defined accents for Audio and Zoom only). */
     :root { --camera: var(--bookmark); }
     #pippanel { --section-accent: var(--camera); font-size: var(--type-body); }
+    /* STC-643: locked while a reframe is open; the reframe bar is what acts then. */
+    #pippanel[inert] { opacity: .4; }
     /* STC-604: the pane's section switch and the Settings row pattern
        (STC-581): a group is a rounded card, a row is 12px above and below
        with a hairline between rows, the label on the left and ONE control on
