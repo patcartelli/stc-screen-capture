@@ -410,12 +410,22 @@ export function afterCapture(): void {
  * panel waits for a person, and quitting without answering it is a choice
  * the recovery prompt gives them the chance to revisit, not a silent export.
  */
-export function closeThumbnail(): Promise<void> {
+export async function closeThumbnail(): Promise<void> {
+  if (panels.length === 0) return;
+  // Hide every panel, let the window server settle, THEN destroy (STC-624).
+  // `dismissNow` hides and destroys in one tick, and at quit the newest panel
+  // is usually key: AppKit then moves key status onto or off a window that is
+  // already being torn down, which is electron/electron#54860 (STC-534). That
+  // was ~187 of 196 e2e crashes at quit over 2026-11-02..12, every one with a
+  // panel open. Same order as the countdown's teardown (STC-588) and the pill's.
+  for (const p of [...panels]) p.hide();
+  await sleep(HIDE_SETTLE_MS);
+  // Re-read the list: a toast's Undo racing the quit can present a panel
+  // during the settle (see `runQuitTeardown`), and it must close too.
   // A copy: dismissing mutates `panels` as each one closes.
   const all = [...panels];
-  if (all.length === 0) return Promise.resolve();
   for (const p of all) p.dismissNow();
-  return Promise.all(all.map((p) => p.waitUntilClosed())).then(() => undefined);
+  await Promise.all(all.map((p) => p.waitUntilClosed()));
 }
 
 /**

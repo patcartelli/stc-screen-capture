@@ -54,11 +54,16 @@ to hide, wait `HIDE_SETTLE_MS`, then destroy. At quit, the panels have nothing
 like it.
 
 So the high crash rate is not a regression in the STC-534 fix. It is the same
-bug reached by a path that fix never covered. Proposed: at quit, hide every
-panel first, wait one settle, then destroy them, as `countdown-window.ts`'s
-`finish()` does. The trigger is a timing coincidence on CI's window server, so
-the evidence would be the crash count in these two files falling, not one green
-run.
+bug reached by a path that fix never covered.
+
+**Done on this branch:** `closeThumbnail` now hides every panel, waits
+`HIDE_SETTLE_MS` (40), then destroys. It re-reads the panel list after the wait,
+so a panel presented during it closes too. That is the order
+`countdown-window.ts`'s `finish()` and the pill already use.
+`app/test/thumbnail-quit-order.test.ts` pins the order at the source and has a
+control showing the old body fails it. The trigger is a timing coincidence on
+CI's window server, so the evidence is the crash count in `recording-copy.e2e`
+and `thumbnail.e2e` falling over the next ~20 jobs, not one green run.
 
 ## Class B: symbolicated by disassembly; caller still unknown
 
@@ -108,8 +113,9 @@ take to settle before closing.
 
 ## Next steps
 
-1. Class A: build the hide-wait-destroy quit for panels, then count crashes in
-   `recording-copy.e2e`/`thumbnail.e2e` over the next ~20 jobs.
+1. Class A: the fix is built (above). Count crashes in
+   `recording-copy.e2e`/`thumbnail.e2e` over the next ~20 jobs once it merges.
+   Re-run this triage's classifier to check.
 2. Class B: make `[tray]` writes synchronous (e.g. `fs.writeSync(2, …)` in
    `logTray`) so a line written in the crashing tick survives. Add a repro test:
    start a take, quit at once, loop it.
