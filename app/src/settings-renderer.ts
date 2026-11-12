@@ -548,7 +548,8 @@ const reframeBtn = $("pipreframe") as HTMLButtonElement;
 const resetBtn = $("pipframereset") as HTMLButtonElement;
 const guidesSwitch = $("pipguidesswitch") as HTMLInputElement;
 const PIP_HINT_PLACE = $("pip-hint").textContent ?? "";
-const PIP_HINT_FRAME = "Drag the picture to frame yourself, or focus it and use the arrow keys. Scroll or use Zoom to get closer. Press Reframe or Escape when you are done.";
+const PIP_HINT_FRAME = "Drag the picture or use the arrow keys to frame yourself. Scroll to zoom. Press Done or Esc to finish.";
+const PIP_FRAME_HELP = $("pipreframe-help").textContent ?? "";
 
 function drawFramingControls(s: PipStyle): void {
   const live = previewKind === "live";
@@ -558,7 +559,13 @@ function drawFramingControls(s: PipStyle): void {
   zoomIn.style.setProperty("--fill-pct", `${((f.zoom - 1) / (PIP_FRAMING_ZOOM_MAX - 1)) * 100}%`);
   $("pipzoom-out").textContent = `${f.zoom.toFixed(1)}×`;
   reframeBtn.disabled = !live;
-  reframeBtn.setAttribute("aria-pressed", String(reframing));
+  // The button names what a press does: Reframe, then Done (never a pressed
+  // state as well, which would make a screen reader say both).
+  reframeBtn.textContent = reframing ? "Done" : "Reframe";
+  reframeBtn.classList.toggle("on", reframing);
+  // Greyed out, the row says why: the preview's own reason (STC-638's words).
+  $("pipreframe-help").textContent = live ? PIP_FRAME_HELP
+    : previewKind === "starting" || !previewNote ? "Waiting for the camera…" : `${previewNote}.`;
   resetBtn.disabled = s.framing === undefined;
   guidesSwitch.checked = framingGuides;
   $("pipguides").hidden = !(reframing && framingGuides);

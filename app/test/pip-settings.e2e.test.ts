@@ -118,7 +118,9 @@ describe("the default PiP framing (STC-642)", () => {
     expect(await settings.isDisabled("#pipreframe")).toBe(true);
     expect(await settings.isDisabled("#pipzoom")).toBe(true);
     expect(await settings.isDisabled("#pipframereset")).toBe(true);
-  });
+    // The fake helper has no camera: the row says so in STC-638's words.
+    await expect.poll(() => settings.textContent("#pipreframe-help"), { timeout: 10_000 }).toBe("No camera available.");
+  }, 60_000);
 
   test("Zoom stores a framing, and Reset stores none", async () => {
     const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
@@ -142,7 +144,7 @@ describe("the default PiP framing (STC-642)", () => {
     await expect.poll(() => readStoredSettings(userData).pipStyle?.framing?.zoom, { timeout: 10_000 }).toBe(2);
 
     await settings.click("#pipreframe");
-    expect(await settings.getAttribute("#pipreframe", "aria-pressed")).toBe("true");
+    expect(await settings.textContent("#pipreframe")).toBe("Done");
     const before = (await settings.locator("#pipbox").boundingBox())!;
     // Drag the picture LEFT: the crop moves right, so the framing's x grows.
     await settings.mouse.move(before.x + before.width * 0.75, before.y + before.height / 2);
@@ -160,7 +162,7 @@ describe("the default PiP framing (STC-642)", () => {
     await settings.check("#pipguidesswitch");
     expect(await settings.isVisible("#pipguides")).toBe(true);
     await settings.keyboard.press("Escape");
-    expect(await settings.getAttribute("#pipreframe", "aria-pressed")).toBe("false");
+    expect(await settings.textContent("#pipreframe")).toBe("Reframe");
     expect(await settings.isHidden("#pipguides")).toBe(true);
   }, 60_000);
 });
