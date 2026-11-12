@@ -1,5 +1,7 @@
 # STC-582 runbook — shortcut defaults that do not collide
 
+**Superseded by STC-645 (2026-11-12):** the defaults are macOS's own screenshot keys now. See `docs/STC-645-RUNBOOK.md`.
+
 Run from `claude/bold-johnson-ft7dut` (not on `master` yet). Nothing here has run on a Mac; the unit tests
 (`hotkeys.test.ts`, `settings.test.ts`, `tray-menu.test.ts`) pass on Linux, the e2e edits are unrun.
 

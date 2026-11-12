@@ -704,7 +704,7 @@ function shortcutRow(action: BindableAction): HTMLElement {
   const bound = shortcutState?.shortcuts[action] ?? null;
   keys.textContent = listening === action ? "Press keys…" : formatAccelerator(bound);
   keys.classList.toggle("listening", listening === action);
-  // Named by its action as well as its keys (STC-587): "Shot Area ⌥⌘1".
+  // Named by its action as well as its keys (STC-587): "Shot Area ⇧⌘4".
   keys.setAttribute("aria-labelledby", `${name.id} ${keys.id}`);
   keys.setAttribute("aria-pressed", String(listening === action));
   keys.addEventListener("click", () => {
@@ -780,6 +780,35 @@ document.addEventListener("keydown", (e) => {
   }
   void applyShortcut(action, parsed.accelerator);
 }, true);
+
+/**
+ * Ends a "Press keys…" wait without rebuilding the rows (STC-645): it is called
+ * from a pointerdown, and a rebuild there would pull the button being pressed
+ * out from under its own click — another keycap, or this row's Clear.
+ */
+function stopListening(): void {
+  const action = listening;
+  if (!action) return;
+  listening = undefined;
+  const keys = document.getElementById(`shortcut-${action}`);
+  if (!keys) return;
+  keys.textContent = formatAccelerator(shortcutState?.shortcuts[action] ?? null);
+  keys.classList.remove("listening");
+  keys.setAttribute("aria-pressed", "false");
+}
+
+// A click anywhere but the waiting keycap ends the wait; the keycap's own click
+// already toggles it. Capture phase, so it runs before that click's handler.
+document.addEventListener("pointerdown", (e) => {
+  if (!listening) return;
+  const target = e.target instanceof Element ? e.target.closest(".keycap") : null;
+  if (target?.id !== `shortcut-${listening}`) stopListening();
+}, true);
+
+// Leaving the pane ends it too: its keydown listener is document-wide, so a
+// row left waiting would swallow the next keystroke typed in another pane.
+const paneShownBefore = onPaneShown;
+onPaneShown = (pane) => { paneShownBefore(pane); stopListening(); };
 
 ($("resetshortcuts") as HTMLButtonElement).addEventListener("click", async () => {
   listening = undefined;

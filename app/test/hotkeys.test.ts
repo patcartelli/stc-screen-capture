@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
-  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, SUPERSEDED_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED, STC415_DEFAULT_SHORTCUTS, shortcutsToReset, resetToNewDefaults, resetOfferText,
+  ACTION_LABELS, SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS, SUPERSEDED_DEFAULT_SHORTCUTS, HYPER, SYSTEM_CLAIMED, STC415_DEFAULT_SHORTCUTS, STC582_DEFAULT_SHORTCUTS, SHORTCUT_DEFAULTS_GENERATION, shortcutsToReset, resetToNewDefaults, resetOfferText,
   OUTCOMES, OUTCOME_MODIFIERS, OUTCOME_LABELS, outcomeAccelerator, planOutcomeVariants, explainVariant,
   type OutcomeVariantReport,
   acceleratorFromKeyStroke, explainShortcut, formatAccelerator, isShotAction, isToolAction, TOOL_ACTIONS,
@@ -62,9 +62,9 @@ describe("parsing an accelerator", () => {
     expect(parseAccelerator("Command+VolumeUp").ok).toBe(false);
   });
 
-  test("the screenshot family is bindable now — it is the default (STC-415)", () => {
-    // The app defaults to ⇧⌘3/4 like CleanShot, which needs a Mac with the
-    // system shortcuts off. `globalShortcut.register` stays the authority.
+  test("the screenshot family is bindable — it is the default (STC-415, STC-645)", () => {
+    // The app defaults to ⇧⌘3/4/5, which needs a Mac with the system
+    // shortcuts off. `globalShortcut.register` stays the authority.
     for (const n of ["3", "4", "5", "6"]) {
       expect(parseAccelerator(`Command+Shift+${n}`).ok).toBe(true);
       expect(parseAccelerator(`ctrl+shift+cmd+${n}`).ok).toBe(true);
@@ -140,7 +140,7 @@ describe("planning a whole set", () => {
   });
 
   test("a duplicate is judged on the NORMALISED form, not the spelling", () => {
-    const p = plan({ window: "OPT+cmd+1" });
+    const p = plan({ window: "SHIFT+cmd+4" });
     expect(p[1]!.problem).toBe("duplicate");
   });
 
@@ -289,7 +289,7 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
     // Not a second literal: every shot action must appear in the wider list,
     // in the same relative order, and nothing else may be in it.
     expect(SHOT_ACTIONS).toEqual(BINDABLE_ACTIONS.filter((a) => a !== "record" && !isToolAction(a)));
-    // previous-area (STC-570) is a shot: captureStill takes it and the ⇧ variants apply.
+    // previous-area (STC-570) is a shot: captureStill takes it and the ⌃ variants apply.
     expect(new Set(BINDABLE_ACTIONS).size).toBe(BINDABLE_ACTIONS.length);
   });
 
@@ -297,27 +297,28 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
     expect([...SHOT_ACTIONS].slice(0, 4)).toEqual(["region", "window", "display", "self-timer"]);
   });
 
-  test("Record's default is ⌘⌥4, and the ⇧⌘8 and ⇧⌘6 it shipped on are superseded (STC-582)", () => {
-    expect(DEFAULT_SHORTCUTS.record).toBe("Alt+Command+4");
+  test("Record's default is ⇧⌘5, and the ⇧⌘8, ⇧⌘6 and ⌥⌘4 it shipped on are superseded (STC-645)", () => {
+    expect(DEFAULT_SHORTCUTS.record).toBe("Shift+Command+5");
     expect(SUPERSEDED_DEFAULT_SHORTCUTS.record).toContain("Shift+Command+6");
     expect(SUPERSEDED_DEFAULT_SHORTCUTS.record).toContain("Shift+Command+8");
+    expect(SUPERSEDED_DEFAULT_SHORTCUTS.record).toContain("Alt+Command+4");
     expect(parseAccelerator(DEFAULT_SHORTCUTS.record!)).toEqual({
-      ok: true, accelerator: "Alt+Command+4",
+      ok: true, accelerator: "Shift+Command+5",
     });
   });
 
-  test("every default is ⌘⌥+<digit>, 1-5 in the table's order, and plans without a problem", () => {
+  test("every default is ⇧⌘+<digit>, macOS's own screenshot keys, and plans without a problem (STC-645)", () => {
     const digits = BINDABLE_ACTIONS.filter((a) => !UNBOUND_BY_DEFAULT.includes(a)).map((a) => {
       const acc = DEFAULT_SHORTCUTS[a];
       expect(acc, `${a} has no default binding`).toBeTruthy();
-      const m = /^Alt\+Command\+(\d)$/.exec(acc!);
-      expect(m, `${a}'s default is not Alt+Command+<digit>: ${acc}`).not.toBeNull();
+      const m = /^Shift\+Command\+(\d)$/.exec(acc!);
+      expect(m, `${a}'s default is not Shift+Command+<digit>: ${acc}`).not.toBeNull();
       return Number(m![1]);
     });
     expect(new Set(digits).size).toBe(digits.length);
     for (const p of planShortcuts(DEFAULT_SHORTCUTS)) expect(p.problem, p.action).toBeUndefined();
-    // STC-582: area, window, full display, record, self-timer = 1..5.
-    expect(digits).toEqual([1, 2, 3, 4, 5]);
+    // area 4, window 2, full display 3, record 5, self-timer 7.
+    expect(digits).toEqual([4, 2, 3, 5, 7]);
   });
 
   test("every bindable action has a label, and Record's says Record", () => {
@@ -337,17 +338,18 @@ describe("Record is a bindable action, not a Shot (STC-388)", () => {
 });
 
 describe("the capture-time outcome variants (STC-415)", () => {
-  test("⇧ adds the clipboard outcome, in canonical order; there is no editor outcome (STC-582)", () => {
-    expect(OUTCOME_MODIFIERS).toEqual({ clipboard: "Shift" });
+  test("⌃ adds the clipboard outcome, as in macOS, in canonical order; there is no editor outcome (STC-645)", () => {
+    expect(OUTCOME_MODIFIERS).toEqual({ clipboard: "Control" });
     expect([...OUTCOMES]).toEqual(["clipboard"]);
-    expect(outcomeAccelerator("Alt+Command+1", "clipboard")).toBe("Alt+Shift+Command+1");
+    expect(outcomeAccelerator("Shift+Command+4", "clipboard")).toBe("Control+Shift+Command+4");
     // However the base was spelled, the variant is the normalised string.
-    expect(outcomeAccelerator("cmd+opt+1", "clipboard")).toBe("Alt+Shift+Command+1");
+    expect(outcomeAccelerator("cmd+shift+3", "clipboard")).toBe("Control+Shift+Command+3");
+    expect(outcomeAccelerator("Alt+Command+1", "clipboard")).toBe("Control+Alt+Command+1");
   });
 
   test("a binding that already holds the modifier has no variant — HYPER has all four", () => {
     for (const o of OUTCOMES) expect(outcomeAccelerator(`${HYPER}+1`, o)).toBeUndefined();
-    expect(outcomeAccelerator("Shift+Command+4", "clipboard")).toBeUndefined();
+    expect(outcomeAccelerator("Control+Command+4", "clipboard")).toBeUndefined();
   });
 
   test("an unparseable base has no variant", () => {
@@ -395,11 +397,11 @@ describe("the capture-time outcome variants (STC-415)", () => {
 
   test("a variant that lands on another action's binding is dropped, the base wins", () => {
     // window is bound to what region's clipboard variant would be.
-    const plans = planShortcuts({ ...DEFAULT_SHORTCUTS, window: "Alt+Shift+Command+1" });
+    const plans = planShortcuts({ ...DEFAULT_SHORTCUTS, window: "Control+Shift+Command+4" });
     const v = planOutcomeVariants(plans);
     expect(v.find((x) => x.action === "region" && x.outcome === "clipboard"))
       .toMatchObject({ accelerator: null, problem: "duplicate" });
-    expect(plans.find((p) => p.action === "window")!.accelerator).toBe("Alt+Shift+Command+1");
+    expect(plans.find((p) => p.action === "window")!.accelerator).toBe("Control+Shift+Command+4");
   });
 
   test("an unbound or refused base has no variants", () => {
@@ -410,7 +412,7 @@ describe("the capture-time outcome variants (STC-415)", () => {
 
 describe("what a variant's line says (STC-415)", () => {
   const variant = (o: Partial<OutcomeVariantReport> = {}): OutcomeVariantReport => ({
-    action: "region", outcome: "clipboard", accelerator: "Alt+Shift+Command+1", registered: false, ...o,
+    action: "region", outcome: "clipboard", accelerator: "Control+Shift+Command+4", registered: false, ...o,
   });
 
   test("a live variant has nothing to explain", () => {
@@ -419,7 +421,7 @@ describe("what a variant's line says (STC-415)", () => {
 
   test("a held modifier names the modifier and the variant it costs", () => {
     expect(explainVariant(variant({ outcome: "clipboard", accelerator: null, problem: "held" })))
-      .toMatch(/⇧.*clipboard/);
+      .toBe("This shortcut already uses ⌃, so it has no clipboard variant.");
   });
 
   test("every problem has its own sentence, and an unknown one is still not silent", () => {
@@ -436,16 +438,21 @@ describe("what a variant's line says (STC-415)", () => {
   });
 });
 
-describe("resetting to the new defaults (STC-582)", () => {
-  test("STC-415's whole row, and the hyperkey row, are offered", () => {
+describe("resetting to the new defaults (STC-582, STC-645)", () => {
+  test("STC-582's ⌘⌥ row, and the hyperkey row, are offered whole", () => {
     const old = BINDABLE_ACTIONS.filter((a) => !UNBOUND_BY_DEFAULT.includes(a));
-    expect(shortcutsToReset(STC415_DEFAULT_SHORTCUTS)).toEqual(old);
+    expect(shortcutsToReset(STC582_DEFAULT_SHORTCUTS)).toEqual(old);
     expect(shortcutsToReset(LEGACY_DEFAULT_SHORTCUTS)).toEqual(old);
+    expect(resetToNewDefaults(STC582_DEFAULT_SHORTCUTS)).toEqual(DEFAULT_SHORTCUTS);
+  });
+
+  test("STC-415's row is the defaults again but for Record, so only Record is offered", () => {
+    expect(shortcutsToReset(STC415_DEFAULT_SHORTCUTS)).toEqual(["record"]);
     expect(resetToNewDefaults(STC415_DEFAULT_SHORTCUTS)).toEqual(DEFAULT_SHORTCUTS);
   });
 
   test("a customised or unbound key is neither offered nor touched", () => {
-    const s: Shortcuts = { ...STC415_DEFAULT_SHORTCUTS, region: "Alt+Shift+R", window: null };
+    const s: Shortcuts = { ...STC582_DEFAULT_SHORTCUTS, region: "Alt+Shift+R", window: null };
     expect(shortcutsToReset(s)).toEqual(["display", "record", "self-timer"]);
     expect(resetToNewDefaults(s)).toEqual({
       ...DEFAULT_SHORTCUTS, region: "Alt+Shift+R", window: null,
@@ -458,9 +465,19 @@ describe("resetting to the new defaults (STC-582)", () => {
   });
 
   test("the offer names each key before and after", () => {
-    const t = resetOfferText({ ...DEFAULT_SHORTCUTS, region: "Shift+Command+4" })!;
-    expect(t.detail).toContain("Shot Area\n    Your shortcut now: ⇧⌘4\n    New default: ⌥⌘1");
+    const t = resetOfferText({ ...DEFAULT_SHORTCUTS, region: "Alt+Command+1" })!;
+    expect(t.detail).toContain("Shot Area\n    Your shortcut now: ⌥⌘1\n    New default: ⇧⌘4");
     expect(t.detail).not.toContain("Record");
+  });
+
+  test("the offer says the defaults follow macOS, not that they avoid it (STC-645)", () => {
+    const t = resetOfferText(STC582_DEFAULT_SHORTCUTS)!;
+    expect(t.detail).toMatch(/follow macOS's own screenshot keys/);
+    expect(t.detail).not.toMatch(/avoid|CleanShot/);
+  });
+
+  test("the defaults generation moved past STC-582's 1", () => {
+    expect(SHORTCUT_DEFAULTS_GENERATION).toBe(2);
   });
 });
 

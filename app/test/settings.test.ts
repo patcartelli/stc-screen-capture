@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readSettings, writeSettings, stripMainOnly, DEFAULT_SETTINGS, DEFAULT_SHARE_SETTINGS, DEFAULT_STILL_SETTINGS,
-  DEFAULT_THUMBNAIL_SETTINGS,
+  DEFAULT_THUMBNAIL_SETTINGS, cleanShortcutsOffered,
 } from "../src/settings.js";
 import { BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, LEGACY_DEFAULT_SHORTCUTS } from "../src/hotkeys.js";
 import { DEFAULT_COUNTDOWN_MS } from "../src/countdown.js";
@@ -26,7 +26,7 @@ describe("the camera preference", () => {
   test("defaults to off when nothing has been saved", () => {
     expect(readSettings(dir()))
       .toEqual({ camera: false, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: 0, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -68,7 +68,7 @@ describe("the camera preference", () => {
     writeSettings(d, { camera: true, nonsense: 1 } as never);
     expect(JSON.parse(readFileSync(join(d, "settings.json"), "utf8")))
       .toEqual({ camera: true, displayId: null, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: 0, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -124,7 +124,7 @@ describe("the display preference (STC-247)", () => {
     writeSettings(d, { camera: true });
     expect(readSettings(d))
       .toEqual({ camera: true, displayId: 2, micDeviceUid: null, cameraDeviceUid: null,
-                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: false, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
+                 systemAudio: false, recordKeys: false, showClicks: true, pipStyle: DEFAULT_PIP_STYLE, previewMuted: false, framingGuides: false, capturePrimed: false, shortcutsOffered: 0, libraryWindow: null, previousAreas: NO_PREVIOUS_AREAS, windowShotLook: "wallpaper", lastBackgroundLook: null,
                  shortcuts: DEFAULT_SHORTCUTS,
                  shutterSound: true, countdownMs: DEFAULT_COUNTDOWN_MS,
                  still: DEFAULT_STILL_SETTINGS,
@@ -316,11 +316,11 @@ describe("the shutter sound preference", () => {
  * be the thing that binds.
  */
 describe("the capture shortcuts", () => {
-  test("default to the ⌘⌥ row when nothing has been saved", () => {
+  test("default to macOS's screenshot keys when nothing has been saved (STC-645)", () => {
     expect(readSettings(dir()).shortcuts).toEqual({
-      region: "Alt+Command+1", window: "Alt+Command+2", display: "Alt+Command+3",
-      record: "Alt+Command+4",
-      "self-timer": "Alt+Command+5",
+      region: "Shift+Command+4", window: "Shift+Command+2", display: "Shift+Command+3",
+      record: "Shift+Command+5",
+      "self-timer": "Shift+Command+7",
       "pick-color": null, "previous-area": null, "capture-text": null,
     });
   });
@@ -335,11 +335,21 @@ describe("the capture shortcuts", () => {
     expect(readSettings(d).shortcuts).toEqual({ ...LEGACY_DEFAULT_SHORTCUTS, display: null });
   });
 
-  test("shortcutsOffered persists and starts false", () => {
+  test("shortcutsOffered persists a generation and starts at 0 (STC-645)", () => {
     const d = dir();
-    expect(readSettings(d).shortcutsOffered).toBe(false);
-    writeSettings(d, { shortcutsOffered: true });
-    expect(readSettings(d).shortcutsOffered).toBe(true);
+    expect(readSettings(d).shortcutsOffered).toBe(0);
+    writeSettings(d, { shortcutsOffered: 2 });
+    expect(readSettings(d).shortcutsOffered).toBe(2);
+  });
+
+  test("STC-582's stored `true` reads as generation 1, so STC-645's question is still asked", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ shortcutsOffered: true }));
+    expect(readSettings(d).shortcutsOffered).toBe(1);
+    expect(cleanShortcutsOffered(false)).toBe(0);
+    expect(cleanShortcutsOffered(-1)).toBe(0);
+    expect(cleanShortcutsOffered(1.5)).toBe(0);
+    expect(cleanShortcutsOffered("2")).toBe(0);
   });
 
   test("a rebinding round-trips, which is the acceptance criterion", () => {
@@ -897,7 +907,7 @@ describe("stripMainOnly (recorder:setSettings)", () => {
   test("drops every main-only key and passes the rest through", () => {
     const dark = lookWrite(LOOKS.find((l) => l.id === "dark")!);
     const out = stripMainOnly({
-      saveFolder: "/x", capturePrimed: true, shortcutsOffered: true,
+      saveFolder: "/x", capturePrimed: true, shortcutsOffered: 2,
       libraryWindow: { x: 0, y: 0, width: 1, height: 1 }, lastBackgroundLook: dark,
       previousAreas: rememberArea(NO_PREVIOUS_AREAS, { id: 1, uuid: "U", width: 100, height: 100 }, { x: 0, y: 0, width: 10, height: 10 }),
       windowShotLook: "background", previewMuted: true,

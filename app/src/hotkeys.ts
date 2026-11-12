@@ -142,26 +142,32 @@ export type Shortcuts = Record<BindableAction, string | null>;
 export const HYPER = "Control+Alt+Shift+Command";
 
 /**
- * What a fresh install binds (STC-582): ⌘⌥ plus a number, 1-5 in the order the
- * Shortcuts table lists them. Moved off ⇧⌘3/4 (STC-415), which are macOS's own
- * screenshot keys and still collided with CleanShot. ⇧ adds the clipboard
- * outcome (`OUTCOME_MODIFIERS`), so a base needs ⇧ free: ⌘⌥ leaves it.
+ * What a fresh install binds (STC-645, Patrick 2026-11-12): macOS's own
+ * screenshot keys. Capture replaces the system shortcuts rather than living
+ * beside them, so the defaults are the keys a Mac user already presses: ⇧⌘3
+ * full display, ⇧⌘4 area (Space in the overlay switches to Window, as it does
+ * in macOS), ⇧⌘5 record. ⇧⌘2 and ⇧⌘7 are free in macOS and take Window and
+ * the self-timer. ⌃ adds the clipboard outcome (`OUTCOME_MODIFIERS`), as it
+ * does in macOS.
  *
- * ⌘⌥N is also used in-app by Xcode, Safari and others; a global registration
- * overrides those while Capture runs (accepted, STC-582).
+ * These register only on a Mac whose own screenshot shortcuts are switched off
+ * (System Settings > Keyboard > Keyboard Shortcuts > Screenshots). While macOS
+ * still holds one, `globalShortcut.register` refuses it and the Shortcuts pane
+ * says something else holds the key. STC-582's ⌘⌥1-5 avoided exactly that
+ * collision; the collision is now the intent.
  */
 export const DEFAULT_SHORTCUTS: Shortcuts = {
-  region: "Alt+Command+1",
-  window: "Alt+Command+2",
-  display: "Alt+Command+3",
-  record: "Alt+Command+4",
-  "self-timer": "Alt+Command+5",
-  // Unbound (STC-627): ⇧⌘5 is reserved for STC-569, and a global key taken
-  // without being asked is worse than a menu item the user binds themselves.
+  region: "Shift+Command+4",
+  window: "Shift+Command+2",
+  display: "Shift+Command+3",
+  record: "Shift+Command+5",
+  "self-timer": "Shift+Command+7",
+  // Unbound (STC-627): a global key taken without being asked is worse than a
+  // menu item the user binds themselves.
   "pick-color": null,
-  // Unbound (STC-570): ⇧⌘5 is reserved for STC-569 and ⌘⌥ digits are spoken for.
+  // Unbound (STC-570), for the same reason.
   "previous-area": null,
-  // Unbound too (STC-572, Patrick 2026-11-03): ⇧⌘5 is reserved for STC-569.
+  // Unbound too (STC-572, Patrick 2026-11-03).
   "capture-text": null,
 };
 
@@ -180,7 +186,10 @@ export const LEGACY_DEFAULT_SHORTCUTS: Shortcuts = {
   "capture-text": null,
 };
 
-/** STC-415's defaults, replaced by STC-582. */
+/**
+ * STC-415's defaults, replaced by STC-582. STC-645 brought four of them back
+ * (only Record differs: ⇧⌘5, not ⇧⌘8), so only Record's is still superseded.
+ */
 export const STC415_DEFAULT_SHORTCUTS: Shortcuts = {
   region: "Shift+Command+4",
   window: "Shift+Command+2",
@@ -192,22 +201,61 @@ export const STC415_DEFAULT_SHORTCUTS: Shortcuts = {
   "capture-text": null,
 };
 
+/** STC-582's defaults (⌘⌥1-5), replaced by STC-645. */
+export const STC582_DEFAULT_SHORTCUTS: Shortcuts = {
+  region: "Alt+Command+1",
+  window: "Alt+Command+2",
+  display: "Alt+Command+3",
+  record: "Alt+Command+4",
+  "self-timer": "Alt+Command+5",
+  "pick-color": null,
+  "previous-area": null,
+  "capture-text": null,
+};
+
 /**
  * Every default an earlier build shipped and a later one replaced, per action:
- * the hyperkey row, STC-415's ⇧⌘ row, and Record's ⇧⌘6 (Siri image search).
- * `shortcutsToReset` offers to move a key sitting on one of these to the
- * current default. Never bound by anything but that check.
+ * the hyperkey row, STC-582's ⌘⌥ row, and Record's ⇧⌘6 (Siri image search)
+ * and ⇧⌘8 (STC-415). `shortcutsToReset` offers to move a key sitting on one of
+ * these to the current default. Never bound by anything but that check.
+ *
+ * NEVER list a current default here: `shortcutsToReset` would then offer to
+ * move a key onto itself, on every launch. STC-415's ⇧⌘4/2/3/7 came off this
+ * list for exactly that reason when STC-645 made them the defaults again, and
+ * `withoutCurrentDefaults` throws at load if one ever comes back.
  */
-export const SUPERSEDED_DEFAULT_SHORTCUTS: Record<BindableAction, readonly string[]> = {
-  region: [LEGACY_DEFAULT_SHORTCUTS.region!, STC415_DEFAULT_SHORTCUTS.region!],
-  window: [LEGACY_DEFAULT_SHORTCUTS.window!, STC415_DEFAULT_SHORTCUTS.window!],
-  display: [LEGACY_DEFAULT_SHORTCUTS.display!, STC415_DEFAULT_SHORTCUTS.display!],
-  record: [LEGACY_DEFAULT_SHORTCUTS.record!, "Shift+Command+6", STC415_DEFAULT_SHORTCUTS.record!],
-  "self-timer": [LEGACY_DEFAULT_SHORTCUTS["self-timer"]!, STC415_DEFAULT_SHORTCUTS["self-timer"]!],
+export const SUPERSEDED_DEFAULT_SHORTCUTS: Record<BindableAction, readonly string[]> = withoutCurrentDefaults({
+  region: [LEGACY_DEFAULT_SHORTCUTS.region!, STC582_DEFAULT_SHORTCUTS.region!],
+  window: [LEGACY_DEFAULT_SHORTCUTS.window!, STC582_DEFAULT_SHORTCUTS.window!],
+  display: [LEGACY_DEFAULT_SHORTCUTS.display!, STC582_DEFAULT_SHORTCUTS.display!],
+  record: [
+    LEGACY_DEFAULT_SHORTCUTS.record!, "Shift+Command+6", STC415_DEFAULT_SHORTCUTS.record!, STC582_DEFAULT_SHORTCUTS.record!,
+  ],
+  "self-timer": [LEGACY_DEFAULT_SHORTCUTS["self-timer"]!, STC582_DEFAULT_SHORTCUTS["self-timer"]!],
   "pick-color": [],
   "previous-area": [],
   "capture-text": [],
-};
+});
+
+function withoutCurrentDefaults(
+  list: Record<BindableAction, readonly string[]>,
+): Record<BindableAction, readonly string[]> {
+  for (const a of BINDABLE_ACTIONS) {
+    const current = DEFAULT_SHORTCUTS[a];
+    if (current != null && list[a].includes(current)) {
+      throw new Error(`SUPERSEDED_DEFAULT_SHORTCUTS.${a} lists the current default ${current}`);
+    }
+  }
+  return list;
+}
+
+/**
+ * Which set of defaults this build ships: 1 was STC-582's ⌘⌥ row, 2 is
+ * STC-645's macOS row. Bump it whenever `DEFAULT_SHORTCUTS` changes, so the
+ * one-time reset question is asked again for the new set (settings.ts
+ * `shortcutsOffered` records the last generation it was asked for).
+ */
+export const SHORTCUT_DEFAULTS_GENERATION = 2;
 
 /**
  * The actions whose binding is still a superseded default and so can be moved
@@ -232,7 +280,7 @@ export function resetOfferText(s: Shortcuts): { message: string; detail: string 
     `${ACTION_LABELS[a]}\n    Your shortcut now: ${formatAccelerator(s[a]!)}\n    New default: ${formatAccelerator(DEFAULT_SHORTCUTS[a]!)}`);
   return {
     message: "Switch to the new default shortcuts?",
-    detail: "Capture's defaults changed to avoid the macOS screenshot keys and CleanShot. These actions are still on the old defaults:\n\n"
+    detail: "Capture's defaults now follow macOS's own screenshot keys (⇧⌘3, ⇧⌘4, ⇧⌘5). These actions are still on the old defaults:\n\n"
       + lines.join("\n\n")
       + "\n\n“Reset to new defaults” switches only these. Shortcuts you set yourself are left alone.",
   };
@@ -307,9 +355,9 @@ export type ParsedAccelerator =
  */
 export const SYSTEM_CLAIMED: readonly string[] = [
   // STC-415: ⌘⇧3/4/5/6 and their ⌃ clipboard variants used to be here. They
-  // are macOS's screenshot family and this app now defaults to them, which
-  // only works on a Mac where those system shortcuts are switched off (the
-  // CleanShot arrangement). `globalShortcut.register` stays the authority: if
+  // are macOS's screenshot family and this app defaults to them (STC-645),
+  // which only works on a Mac where those system shortcuts are switched off.
+  // `globalShortcut.register` stays the authority: if
   // macOS still holds one it returns false and preferences says "something
   // else on this Mac already holds this shortcut".
   // Spotlight, the character/emoji viewer, the app switcher, quit.
@@ -521,15 +569,16 @@ export const OUTCOMES = ["clipboard"] as const;
 export type Outcome = (typeof OUTCOMES)[number];
 
 /**
- * The modifier each outcome ADDS to a shot's own binding: ⇧ copies to the
- * clipboard (STC-582; ⌃ before).
+ * The modifier each outcome ADDS to a shot's own binding: ⌃ copies to the
+ * clipboard, as it does in macOS (STC-645; ⇧ under STC-582's ⌘⌥ defaults, ⌃
+ * under STC-415's before that).
  *
  * Variants are DERIVED, never stored: a stored one would be a second binding
  * to rebind, reset and migrate, and could drift from the base it belongs to.
  * Rebinding a shot moves its variants with it.
  */
 export const OUTCOME_MODIFIERS: Record<Outcome, Modifier> = {
-  clipboard: "Shift",
+  clipboard: "Control",
 };
 
 /** `undefined` when the binding already holds that modifier, so there is no
