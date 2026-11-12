@@ -2,6 +2,8 @@
 
 Run from branch `accounts/stc-644-selection-scrim` until it merges, then `master`.
 
+**Passed on the Mac 2026-11-12: all 15 checks.**
+
 ```bash
 git fetch origin && git checkout accounts/stc-644-selection-scrim && npm run app:start
 ```
