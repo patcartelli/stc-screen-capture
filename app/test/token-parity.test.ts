@@ -145,12 +145,10 @@ describe("pixels: tokens are applied", () => {
         p.style.height = "40px";
       }
       if (f === "overlay.html") {
-        // Window mode's pick: one tinted visible piece (STC-625), as overlay.ts draws it.
-        const tint = document.createElement("div");
-        tint.className = "tint";
-        Object.assign(tint.style, { display: "block", left: "40px", top: "40px", width: "200px", height: "120px" });
-        $("highlight").replaceChildren(tint);
-        $("highlight").style.display = "block";
+        // Window mode's pick: one tinted visible piece (STC-625), as overlay.ts
+        // draws it since STC-644 — a path in #wdim, inside the faded-in #dim.
+        document.body.classList.add("window-mode", "entered");
+        $("wdim").querySelector(".tint")!.setAttribute("d", "M40 40H240V160H40Z");
       }
     }, file);
   };
