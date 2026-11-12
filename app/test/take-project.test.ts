@@ -36,13 +36,24 @@ describe("the PiP default seeds a take (STC-461)", () => {
     expect(defaultStyleForTake(CIRCLE, false)).toBeNull();
     expect(recordTimeProject({ showClicks: true, pipStyle: null })).toBeNull();
   });
-  test("a non-default style with the camera on seeds a v16 pip, never a framing", () => {
-    const style = defaultStyleForTake({ ...CIRCLE, framing: { x: 0.3, y: 0.5, zoom: 2 } }, true)!;
+  test("a non-default style with the camera on seeds a v16 pip", () => {
+    const style = defaultStyleForTake(CIRCLE, true)!;
     expect(style.framing).toBeUndefined();
     const doc = JSON.parse(recordTimeProject({ showClicks: true, pipStyle: style })!);
     expect(doc.version).toBe(16);
     expect(doc.pip).toEqual({ enabled: true, corner: "bottom-right", widthPct: 0.125, marginPx: 32, style });
     expect(doc.showClicks).toBeUndefined();
+  });
+  test("a default framing (STC-642) is seeded with the style", () => {
+    const framing = { x: 0.3, y: 0.5, zoom: 2 };
+    const style = defaultStyleForTake({ ...CIRCLE, framing }, true)!;
+    expect(style.framing).toEqual(framing);
+    expect(JSON.parse(recordTimeProject({ showClicks: true, pipStyle: style })!).pip.style.framing).toEqual(framing);
+  });
+  test("a framing alone makes the style worth seeding (STC-642)", () => {
+    const framing = { x: 0.5, y: 0.4, zoom: 1.5 };
+    expect(defaultStyleForTake({ ...DEFAULT_PIP_STYLE, framing }, true)).toEqual({ ...DEFAULT_PIP_STYLE, framing });
+    expect(defaultStyleForTake({ ...DEFAULT_PIP_STYLE, framing }, false)).toBeNull();
   });
   test("both choices together keep both, at v16", () => {
     const doc = JSON.parse(recordTimeProject({ showClicks: false, pipStyle: CIRCLE })!);

@@ -782,12 +782,24 @@ describe("pipStyle (STC-461)", () => {
   test("defaults to DEFAULT_PIP_STYLE", () => {
     expect(readSettings(dir()).pipStyle).toEqual(DEFAULT_PIP_STYLE);
   });
-  test("round-trips, and never stores a framing", () => {
+  test("round-trips, framing included (STC-642)", () => {
     const d = dir();
     writeSettings(d, { pipStyle: { ...DEFAULT_PIP_STYLE, shape: "circle", framing: { x: 0.3, y: 0.5, zoom: 2 } } });
     const back = readSettings(d).pipStyle;
     expect(back.shape).toBe("circle");
+    expect(back.framing).toEqual({ x: 0.3, y: 0.5, zoom: 2 });
+  });
+  test("a centred, unzoomed framing is stored as none, so it stays the default (STC-642)", () => {
+    const d = dir();
+    writeSettings(d, { pipStyle: { ...DEFAULT_PIP_STYLE, framing: { x: 0.5, y: 0.5, zoom: 1 } } });
+    const back = readSettings(d).pipStyle;
     expect(back.framing).toBeUndefined();
+    expect(back).toEqual(DEFAULT_PIP_STYLE);
+  });
+  test("a bad stored framing is the whole style's problem: the default", () => {
+    const d = dir();
+    writeFileSync(join(d, "settings.json"), JSON.stringify({ pipStyle: { ...DEFAULT_PIP_STYLE, framing: { x: 0.3, y: 0.5, zoom: 9 } } }));
+    expect(readSettings(d).pipStyle).toEqual(DEFAULT_PIP_STYLE);
   });
   test("a bad stored style falls back to the default", () => {
     const d = dir();
