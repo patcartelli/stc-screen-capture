@@ -12,6 +12,10 @@ import { iconSvg, type Glyph } from "./icons.js";
 import { buildMenuRow } from "./device-menu-dom.js";
 import { legendItems } from "./legend.js";
 import {
+  CHROME_DRAG_OPACITY, GUIDE_OPACITY, guidesShown, SCRIM_FADE_IN_MS, SCRIM_FADE_OUT_MS,
+  WINDOW_CUTOUT_RADIUS, windowDimPath, windowEdgePaths, windowHolesPath,
+} from "./scrim.js";
+import {
   previewLine, thirdsLines, PREVIEW_TILE_HEIGHT, PREVIEW_TILE_WIDTH, type PreviewView,
 } from "./camera-preview.js";
 
@@ -61,15 +65,30 @@ interface OverlayPayload {
   menu?: { anchor: MenuAnchor; rows: MenuRow[] };
   /** STC-638 — the camera menu's live view; present only while that menu is open. */
   cameraPreview?: { view: PreviewView; guides: boolean; mirror: boolean };
+  /** STC-644 — the overlay is closing: fade out, main hides it after. */
+  leaving?: boolean;
 }
 
 const $ = (id: string) => document.getElementById(id)!;
-const marquee = $("marquee"), highlight = $("highlight");
+const marquee = $("marquee");
+const wdim = $("wdim");
+const wdimPath = wdim.querySelector<SVGPathElement>(".dim")!;
+const wtintPath = wdim.querySelector<SVGPathElement>(".tint")!;
+const wclipPath = $("wclip-path");
+const wedgeLight = wdim.querySelector<SVGPathElement>(".edge.light")!;
+const wedgeDark = wdim.querySelector<SVGPathElement>(".edge.dark")!;
+const guideV = $("guide-v"), guideH = $("guide-h");
 const sizeChip = $("size"), titleChip = $("title"), legend = $("legend");
 const bar = $("bar"), pane = $("pane"), menuEl = $("menu");
 const sizeW = $("size-w") as HTMLInputElement, sizeH = $("size-h") as HTMLInputElement;
 /** Every `ControlId` has a `#ctl-<id>` in overlay.html (STC-456). */
 const ctl = (id: ControlId) => $(`ctl-${id}`);
+
+// STC-644: every number the scrim's CSS uses comes from scrim.ts, here, once.
+for (const [name, value] of [
+  ["--scrim-fade-in", `${SCRIM_FADE_IN_MS}ms`], ["--scrim-fade-out", `${SCRIM_FADE_OUT_MS}ms`],
+  ["--guide-opacity", String(GUIDE_OPACITY)], ["--chrome-drag-opacity", String(CHROME_DRAG_OPACITY)],
+] as const) document.documentElement.style.setProperty(name, value);
 
 // Glyphs (STC-456): the markup names them, `icons.ts` holds the one copy of
 // every path. Swapped in once at startup.
@@ -406,6 +425,59 @@ function renderMenu(m: { anchor: MenuAnchor; rows: MenuRow[] } | undefined,
   }
 }
 
+/**
+ * STC-644: the dim's entrance. The window was shown on `ready-to-show` and the
+ * first state arrives just after, so the first frame is painted at opacity 0
+ * and the NEXT one starts the fade: two animation frames, or the transition
+ * would have nothing to start from.
+ */
+function enter(): void {
+  requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add("entered")));
+}
+
+/**
+ * STC-644: Window mode's dim, cutout, tint and edge, in this window's own
+ * space. No hovered window (the pointer over bare desktop, or over a window on
+ * another display) is the whole display dimmed, as Area mode is before a drag.
+ */
+function drawWindowDim(w: WindowInfo | undefined): void {
+  const viewport = { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
+  if (!w) {
+    wdimPath.setAttribute("d", windowDimPath(viewport, viewport, [], 0));
+    for (const el of [wtintPath, wclipPath, wedgeLight, wedgeDark]) el.setAttribute("d", "");
+    return;
+  }
+  const frame = toLocal(w.bounds);
+  const pieces = w.visible.map(toLocal);
+  // STC-625: what can be SEEN of it, one piece per visible rect, and nothing
+  // over the window in front. The readout still measures the whole window,
+  // because that is what a click captures.
+  const holes = windowHolesPath(frame, pieces, WINDOW_CUTOUT_RADIUS);
+  wdimPath.setAttribute("d", windowDimPath(viewport, frame, pieces, WINDOW_CUTOUT_RADIUS));
+  wtintPath.setAttribute("d", holes);
+  wclipPath.setAttribute("d", holes);
+  const edge = windowEdgePaths(frame, WINDOW_CUTOUT_RADIUS);
+  wedgeLight.setAttribute("d", edge.light);
+  wedgeDark.setAttribute("d", edge.dark);
+}
+
+/** STC-644: where the guide lines are, in this window's space, and whether a
+ * button is down here. Real input writes it on the pointer event itself. */
+const guide: { at?: Point; inside: boolean; pressing: boolean } = { inside: false, pressing: false };
+
+function syncGuides(): void {
+  const s = current?.state;
+  const shown = s !== undefined && guide.at !== undefined && guidesShown({
+    mode: s.mode, hasSelection: s.rect !== undefined, dragging: s.drag !== undefined,
+    pressing: guide.pressing, pointerInside: guide.inside,
+  });
+  document.body.classList.toggle("guides", shown);
+  if (shown) {
+    guideV.style.left = `${Math.round(guide.at!.x)}px`;
+    guideH.style.top = `${Math.round(guide.at!.y)}px`;
+  }
+}
+
 function render(p: OverlayPayload): void {
   const previous = current;
   current = p;
@@ -424,23 +496,25 @@ function render(p: OverlayPayload): void {
   const { state } = p;
   document.body.classList.toggle("window-mode", state.mode === "window");
   document.body.classList.toggle("has-selection", state.rect !== undefined);
+  document.body.classList.toggle("dragging", state.drag !== undefined);
+  document.body.classList.toggle("leaving", p.leaving === true);
+  if (!previous) enter();
+  if (SYNTHETIC_INPUT) {
+    // No window-server input here, so the guides follow the reducer's pointer.
+    const at = state.pointer && { x: state.pointer.x - origin.x, y: state.pointer.y - origin.y };
+    guide.at = at;
+    guide.inside = at !== undefined && at.x >= 0 && at.y >= 0
+      && at.x < window.innerWidth && at.y < window.innerHeight;
+  }
+  syncGuides();
   renderLegend(state.mode, p.phase, p.regionOnly);
   renderBar(p);
 
   if (state.mode === "window") {
     hide(marquee, sizeChip, ...handles.values());
     const w = p.windows.find((x) => x.id === state.hoveredWindowId);
-    if (!w) { hide(highlight, titleChip); return; }
-    // STC-625: tint what can be SEEN of it, one piece per visible rect, and
-    // nothing over the window in front. The readout still measures the whole
-    // window, because that is what a click captures.
-    highlight.replaceChildren(...w.visible.map((r) => {
-      const tint = document.createElement("div");
-      tint.className = "tint";
-      place(tint, toLocal(r));
-      return tint;
-    }));
-    highlight.style.display = "block";
+    drawWindowDim(w);
+    if (!w) { hide(titleChip); return; }
     const name = [w.app, w.title].filter(Boolean).join(" — ") || "Window";
     const display = p.displays.find((d) => rectContains(d.bounds, {
       x: w.bounds.x + w.bounds.width / 2, y: w.bounds.y + w.bounds.height / 2,
@@ -453,7 +527,7 @@ function render(p: OverlayPayload): void {
     return;
   }
 
-  hide(highlight, titleChip);
+  hide(titleChip);
   if (!state.rect) { hide(marquee, sizeChip, ...handles.values()); return; }
 
   const local = toLocal(state.rect);
@@ -559,6 +633,18 @@ for (const f of [sizeW, sizeH]) {
 if (!SYNTHETIC_INPUT) installRealInput();
 
 function installRealInput(): void {
+// STC-644: the guides move on the event itself, never after a round trip
+// through main: that is what keeps them from trailing the pointer. Added
+// first, so they run before the bar can swallow a press.
+window.addEventListener("pointermove", (e) => {
+  guide.at = { x: e.clientX, y: e.clientY };
+  guide.inside = true;
+  syncGuides();
+});
+document.documentElement.addEventListener("pointerleave", () => { guide.inside = false; syncGuides(); });
+window.addEventListener("pointerdown", () => { guide.pressing = true; syncGuides(); });
+window.addEventListener("pointerup", () => { guide.pressing = false; syncGuides(); });
+
 window.addEventListener("pointerdown", (e) => {
   // The bar sits over the scrim, so a press on it must not also start a new
   // marquee underneath. First refusal, then the selection as before.
