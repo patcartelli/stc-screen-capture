@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen } from "electron";
+import { app, BrowserWindow, ipcMain, screen, systemPreferences } from "electron";
 import { join } from "node:path";
 import { focusPanel, PANEL_WINDOW_TYPE } from "./panel-focus.js";
 import {
@@ -15,6 +15,7 @@ import {
   type MenuPick, type MenuRow,
 } from "./device-picker.js";
 import { micDevices } from "./mic-devices.js";
+import { scrimFadeOutMs } from "./scrim.js";
 import { PreviewController, previewWanted, PREVIEW_EXTRA_HEIGHT, type PreviewPort } from "./camera-preview.js";
 
 /**
@@ -372,6 +373,8 @@ class OverlaySession {
   private settle!: (r: OverlayResult) => void;
   readonly promise: Promise<OverlayResult>;
   private done = false;
+  /** STC-644: set once `finish` has begun, so every window fades out. */
+  private leaving = false;
   private phase: OverlayPhase = "select";
   private pending: SelectionOutcome | undefined;
   private options: OptionsState;
@@ -572,6 +575,7 @@ class OverlaySession {
         return { anchor: menuAnchor(layout, this.options.openMenu, d, rows.length, extra), rows };
       })(),
       // STC-638: the camera menu's live view. Present only while that menu is open.
+      leaving: this.leaving || undefined,
       cameraPreview: this.preview && this.options.openMenu === "camera"
         ? { view: this.preview.view, guides: this.opts.cameraPreview!.guides, mirror: this.opts.cameraPreview!.mirror }
         : undefined,
@@ -821,6 +825,15 @@ class OverlaySession {
     screen.removeListener("display-added", this.onDisplaysChanged);
     screen.removeListener("display-removed", this.onDisplaysChanged);
     screen.removeListener("display-metrics-changed", this.onDisplaysChanged);
+
+    // STC-644: fade first, hide and destroy after. The renderer reads the same
+    // OS preference through CSS, so under reduced motion neither side fades
+    // and nothing waits here. A window still waiting for `ready-to-show` is
+    // not on screen and is simply hidden below.
+    this.leaving = true;
+    this.pushAll();
+    const fade = scrimFadeOutMs(systemPreferences.getAnimationSettings().prefersReducedMotion);
+    if (fade > 0) await sleep(fade);
 
     const excludeWindowIds: number[] = [];
     for (const w of this.windows) {

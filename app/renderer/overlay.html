@@ -30,9 +30,12 @@
      around the selection: the shadow follows the element on every frame with
      no chance of a one-pixel seam appearing between panels as the marquee
      moves, and there is exactly one thing to keep in sync with the state. */
+  /* STC-644: the paired edge. A light line with a dark one inside it, so the
+     edge reads over a white window as well as over a dark desktop. The dark
+     line is --handle-edge, the hairline the handles wear for the same reason. */
   #marquee {
     position: absolute; box-sizing: border-box;
-    box-shadow: 0 0 0 100000px var(--scrim);
+    box-shadow: inset 0 0 0 1px var(--handle-edge), 0 0 0 100000px var(--scrim);
     border: 1px solid var(--text);
     display: none;
   }
@@ -50,6 +53,52 @@
   body.has-selection #scrim, body.window-mode #scrim { display: none; }
   body.window-mode #marquee { display: none; }
 
+  /* STC-644: the dim fades in; the whole overlay fades out before main hides
+     it. Only the dim fades in: the legend and the bar are at full strength on
+     their first frame. Durations are scrim.ts's, set on :root by overlay.ts. */
+  #dim { opacity: 0; transition: opacity var(--scrim-fade-in) ease-out; }
+  body.entered #dim { opacity: 1; }
+  body.leaving { opacity: 0; transition: opacity var(--scrim-fade-out) ease-in; }
+
+  /* STC-644: Window mode dims too (scrim.ts rule 1). One SVG: the dim with the
+     window's visible pieces cut out, the tint over those pieces, and the paired
+     edge round the frame, clipped to the pieces so no edge crosses the window
+     in front. Paths are scrim.ts's; this only paints them. */
+  #wdim {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    display: none; pointer-events: none; overflow: visible;
+  }
+  body.window-mode #wdim { display: block; }
+  #wdim .dim { fill: var(--scrim); fill-rule: evenodd; }
+  /* Mixed from --accent rather than --accent-soft (a fixed rgba): the tint
+     must follow the accent token. At 18% it is --accent-soft's own dark value. */
+  #wdim .tint { fill: color-mix(in srgb, var(--accent) 18%, transparent); }
+  #wdim .edge { fill: none; stroke-width: 1px; }
+  #wdim .edge.light { stroke: var(--text); }
+  #wdim .edge.dark { stroke: var(--handle-edge); }
+
+  /* STC-644: guide lines through the pointer, Area mode before the drag only
+     (scrim.ts's guidesShown). Paired, like the edge. Placed on the pointer
+     event itself and never eased, so they cannot trail the pointer. The system
+     crosshair cursor stays. */
+  .guide {
+    position: absolute; display: none; pointer-events: none;
+    background: var(--text); opacity: var(--guide-opacity);
+  }
+  #guide-v { top: 0; bottom: 0; width: 1px; box-shadow: 1px 0 0 var(--handle-edge); }
+  #guide-h { left: 0; right: 0; height: 1px; box-shadow: 0 1px 0 var(--handle-edge); }
+  body.guides .guide { display: block; }
+
+  /* STC-644: quiet while dragging. The chrome backs off so the edge being
+     drawn is what the eye follows. */
+  #legend, #bar { transition: opacity var(--dur-quick) ease-out; }
+  body.dragging #legend, body.dragging #bar { opacity: var(--chrome-drag-opacity); }
+
+  @media (prefers-reduced-motion: reduce) {
+    #dim, body.leaving { transition: none; }
+    #legend, #bar { transition: none; }
+  }
+
   /* Resize handles. Eight of them, drawn as small white squares with a dark
      hairline so they read against both a bright and a dark backdrop. */
   .handle {
@@ -61,23 +110,6 @@
   .handle.ne { cursor: nesw-resize } .handle.sw { cursor: nesw-resize }
   .handle.n  { cursor: ns-resize }   .handle.s  { cursor: ns-resize }
   .handle.w  { cursor: ew-resize }   .handle.e  { cursor: ew-resize }
-
-  /* The window-mode highlight (STC-625): a tint over the part of the window
-     that can be SEEN, one `.tint` per visible rect, and nothing over whatever
-     covers the rest. No border: the pieces of one region meet edge to edge,
-     and an outline on each would draw seams inside the window. Never
-     animated, so reduced motion needs nothing here. */
-  #highlight {
-    position: absolute; left: 0; top: 0; display: none;
-    pointer-events: none;
-  }
-  /* Mixed from --accent rather than --accent-soft (a fixed rgba): the tint is
-     now the highlight's ONLY mark, so it must follow the accent token. At 18%
-     it is --accent-soft's own dark value. */
-  #highlight .tint {
-    position: absolute;
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
-  }
 
   /* Readouts. Positioned by script; styled to stay legible over anything. */
   .chip {
@@ -184,9 +216,18 @@
 </style>
 </head>
 <body>
-  <div id="scrim"></div>
-  <div id="marquee"></div>
-  <div id="highlight"></div>
+  <div id="dim">
+    <div id="scrim"></div>
+    <div id="marquee"></div>
+    <svg id="wdim" aria-hidden="true">
+      <defs><clipPath id="wclip"><path id="wclip-path"></path></clipPath></defs>
+      <path class="dim"></path>
+      <path class="tint"></path>
+      <g clip-path="url(#wclip)"><path class="edge light"></path><path class="edge dark"></path></g>
+    </svg>
+  </div>
+  <div id="guide-v" class="guide"></div>
+  <div id="guide-h" class="guide"></div>
   <div id="size" class="chip"></div>
   <div id="title" class="chip"></div>
   <div id="legend"></div>

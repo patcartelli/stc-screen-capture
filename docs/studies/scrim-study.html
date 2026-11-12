@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Study — the scrim</title>
+<style>
+  /* One idea: the dim that appears when you pick Shot or Record.
+     Mirrors overlay.html in stc-screen-capture: one element with a huge spread
+     shadow draws both the dim and the hole in it. The knobs on the right change
+     the four things that decide how it feels. */
+  :root {
+    --text: #f1f1ee;
+    --accent: #7aa2ff;
+    --scrim-a: .42;          /* knob: dim level (app: .42) */
+    --fade-in: 0ms;          /* knob: entrance (app: none, it snaps) */
+    --fade-out: 0ms;         /* knob: exit (app: none, it snaps) */
+    --handle-edge: rgba(0,0,0,.55);
+    --surface-deep: #0f0f0f;
+    --font: system-ui, -apple-system, "Geist", sans-serif;
+    --mono: ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; font: 13px/1.3 var(--font); background: #111; color: #ddd; }
+
+  #app { display: grid; grid-template-columns: 1fr 288px; height: 100%; }
+
+  /* ---- the fake desktop -------------------------------------------------- */
+  #stage { position: relative; overflow: hidden; user-select: none; cursor: crosshair; }
+  #stage[data-desk="light"] { background: linear-gradient(160deg, #e9eef8, #c9d4e8); }
+  #stage[data-desk="dark"]  { background: linear-gradient(160deg, #1d2027, #0e1014); }
+  #stage[data-mode="window"] { cursor: default; }
+
+  .menubar { position: absolute; left: 0; right: 0; top: 0; height: 24px; background: rgba(255,255,255,.55); backdrop-filter: blur(8px); }
+  #stage[data-desk="dark"] .menubar { background: rgba(255,255,255,.08); }
+
+  .win { position: absolute; border-radius: 10px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.25), 0 0 0 1px rgba(0,0,0,.12); }
+  .win header { height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 11px; }
+  .win header i { width: 10px; height: 10px; border-radius: 50%; background: #ff5f57; }
+  .win header i:nth-child(2) { background: #febc2e; } .win header i:nth-child(3) { background: #28c840; }
+  .win header span { margin-left: 8px; opacity: .6; }
+  .win .body { padding: 14px; display: grid; gap: 8px; }
+  .win .body b { display: block; height: 8px; border-radius: 4px; background: currentColor; opacity: .14; }
+  #stage[data-desk="light"] .win { background: #fff; color: #222; }
+  #stage[data-desk="light"] .win header { background: #f2f2f2; }
+  #stage[data-desk="dark"]  .win { background: #24272e; color: #eee; }
+  #stage[data-desk="dark"]  .win header { background: #1b1d23; }
+
+  /* ---- the overlay, as the app draws it ---------------------------------- */
+  #ov { position: absolute; inset: 0; opacity: 0; transition: opacity var(--fade-out) ease-out; }
+  #ov.on { opacity: 1; transition: opacity var(--fade-in) ease-out; }
+
+  /* Before the first drag: the whole display, no hole. */
+  #scrim { position: absolute; inset: 0; background: rgba(0,0,0,var(--scrim-a)); }
+  #stage.has-selection #scrim, #stage[data-mode="window"] #scrim { display: none; }
+
+  /* Guide lines: full-width and full-height through the pointer, before the drag only.
+     Paired = a light line with a dark line beside it, so it reads over white and over dark.
+     --ga is the knob. */
+  #gv, #gh { position: absolute; display: none; pointer-events: none; }
+  #gv { top: 0; bottom: 0; width: 1px; }
+  #gh { left: 0; right: 0; height: 1px; }
+  #stage[data-gstyle="paired"] #gv { background: rgba(255,255,255,var(--ga)); box-shadow: 1px 0 0 rgba(0,0,0,calc(var(--ga) * .8)); }
+  #stage[data-gstyle="paired"] #gh { background: rgba(255,255,255,var(--ga)); box-shadow: 0 1px 0 rgba(0,0,0,calc(var(--ga) * .8)); }
+  #stage[data-gstyle="solid"] #gv, #stage[data-gstyle="solid"] #gh { background: rgba(255,255,255,var(--ga)); }
+  #stage[data-guides="on"][data-mode="region"].has-pointer:not(.has-selection):not(.dragging) #gv,
+  #stage[data-guides="on"][data-mode="region"].has-pointer:not(.has-selection):not(.dragging) #gh { display: block; }
+
+  /* Region: one element, one shadow. */
+  #marquee { position: absolute; display: none; }
+  #stage.has-selection #marquee { display: block; }
+  #stage[data-mode="window"] #marquee { display: none; }
+  /* Edge styles, shared by the area marquee and (when it dims) the window cutout.
+     --eb is the border, --ei the extra shadows that ride with it. */
+  #stage[data-edge="current"] { --eb: 1px solid var(--text); --ei: 0 0 0 0 transparent; }
+  /* Today. */
+  #stage[data-edge="paired"]  { --eb: 1px solid var(--text); --ei: inset 0 0 0 1px rgba(0,0,0,.35); }
+  #stage[data-edge="bold"]    { --eb: 2px solid var(--text); --ei: inset 0 0 0 1px rgba(0,0,0,.30), 0 0 0 1px rgba(0,0,0,.35); }
+  #stage[data-edge="accent"]  { --eb: 2px solid var(--accent); --ei: inset 0 0 0 1px rgba(0,0,0,.30); }
+  #stage[data-edge="none"]    { --eb: 0 solid transparent; --ei: 0 0 0 0 transparent; }
+  #marquee { border: var(--eb); box-shadow: var(--ei), 0 0 0 100000px rgba(0,0,0,var(--scrim-a)); }
+
+  .handle { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: var(--text);
+    border: 1px solid var(--handle-edge); border-radius: 2px; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+
+  /* Window: the app tints only. The knob adds the dim-with-a-hole the region has. */
+  /* Radius matches the fake windows (10px). The app's tint rects are square, so
+     a rounded window shows tint in its corners; this is the knob-free fix. */
+  #stage[data-mode="window"] .handle, #stage[data-mode="window"] #size { display: none !important; }
+  #wcut { position: absolute; display: none; pointer-events: none; border-radius: 10px; }
+  #wcut .tint { border-radius: 10px; }
+  #wcut .tint { position: absolute; inset: 0; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  #stage[data-wdim="on"] #wcut { border: var(--eb); box-shadow: var(--ei), 0 0 0 100000px rgba(0,0,0,var(--scrim-a)); }
+
+  .chip { position: absolute; display: none; padding: 4px 10px; border-radius: 6px; background: rgba(20,20,22,.86);
+    color: var(--text); font: 12px/1 var(--mono); font-variant-numeric: tabular-nums; box-shadow: 0 2px 8px rgba(0,0,0,.35); white-space: nowrap; pointer-events: none; }
+
+  /* The legend. "Today" is the app (STC-598): --surface-deep, readout-face keycaps,
+     hairline between items, pinned to the screen bottom. Every other design sits
+     near the action instead (see placeLegend) and changes how the keys are drawn. */
+  #legend { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%);
+    display: none; align-items: center; gap: 12px; padding: 0 16px; height: 36px; border-radius: 16px;
+    background: #0f0f0f; color: rgba(241,241,238,.64); box-shadow: 0 12px 32px rgba(0,0,0,.45);
+    font: 400 11px/1 var(--font); pointer-events: none; white-space: nowrap;
+    transition: opacity 160ms ease-out, filter 400ms ease-out; }
+  #legend.show { display: flex; }
+  #legend .item { display: flex; align-items: center; gap: 8px; }
+  #legend .item + .item { position: relative; }
+  #legend .item + .item::before { content: ""; position: absolute; left: -7px; top: -6px; bottom: -6px; width: 1px; background: rgba(255,255,255,.12); }
+  #legend kbd { font: 400 11px/1 var(--mono); color: #f1f1ee; padding: 4px 6px; border-radius: 2px; background: rgba(255,255,255,.12); }
+  /* Entrance emphasis, shared by every design: a soft accent glow for 2.5 s. */
+  #legend.emph { filter: drop-shadow(0 0 12px color-mix(in srgb, var(--accent) 75%, transparent)); }
+  #stage[data-lenter="settle"].dragging #legend { opacity: .35; }
+  #stage:not([data-ldesign="today"]) #legend { bottom: auto; transform: none; }
+
+  /* A. Pill: today's anatomy, larger and lifted off the dim. */
+  #stage[data-ldesign="pill"] #legend { height: 44px; gap: 22px; padding: 0 22px; font-size: 13px; color: #f1f1ee;
+    background: #1b1b1e; box-shadow: 0 12px 32px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.18); }
+  #stage[data-ldesign="pill"] #legend kbd { font-size: 12px; padding: 6px 8px; border-radius: 5px; background: rgba(255,255,255,.2); box-shadow: inset 0 -1px 0 rgba(255,255,255,.28); }
+  #stage[data-ldesign="pill"] #legend .item + .item::before { left: -11px; top: -8px; bottom: -8px; background: rgba(255,255,255,.18); }
+
+  /* B. Tag: two things only (the other mode, and Esc). Drag is implied by the crosshair. */
+  #stage[data-ldesign="tag"] #legend { height: 26px; gap: 12px; padding: 0 10px; border-radius: 8px; font-size: 11px; color: #f1f1ee;
+    background: #1b1b1e; box-shadow: 0 6px 16px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.14); }
+  #stage[data-ldesign="tag"] #legend .item { gap: 6px; }
+  #stage[data-ldesign="tag"] #legend .item + .item::before { display: none; }
+  #stage[data-ldesign="tag"] #legend kbd { font-size: 10px; padding: 3px 5px; }
+
+  /* C. Card: a vertical key list, read like a tooltip. */
+  #stage[data-ldesign="card"] #legend { flex-direction: column; align-items: stretch; height: auto; gap: 9px; padding: 12px 14px; border-radius: 12px;
+    font-size: 12px; color: #f1f1ee; background: #1b1b1e; box-shadow: 0 12px 32px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.16); }
+  #stage[data-ldesign="card"] #legend .item { gap: 12px; }
+  #stage[data-ldesign="card"] #legend .item + .item::before { display: none; }
+  #stage[data-ldesign="card"] #legend kbd { min-width: 46px; text-align: center; font-size: 11px; padding: 5px 7px; border-radius: 4px; }
+
+  /* D. Docked: flush under the selection, carrying the size readout so the
+     selection has one attached instrument instead of two floating chips. */
+  #stage[data-ldesign="docked"] #legend { height: 34px; gap: 14px; padding: 0 14px; border-radius: 0 0 10px 10px; font-size: 12px; color: #f1f1ee;
+    background: #0f0f0f; box-shadow: 0 10px 24px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.14); }
+  #stage[data-ldesign="docked"] #legend.floating { border-radius: 10px; }
+  #stage[data-ldesign="docked"] #legend .size { font: 400 12px/1 var(--mono); font-variant-numeric: tabular-nums; color: #fff; }
+  #stage[data-ldesign="docked"] #legend .size:empty { display: none; }
+  #stage[data-ldesign="docked"] #legend .item + .item::before, #stage[data-ldesign="docked"] #legend .size + .item::before { left: -8px; background: rgba(255,255,255,.16); }
+  #stage[data-ldesign="docked"] #size { display: none !important; }
+
+  /* E. Switch: the two modes are shown as a switch, so the pill says which one
+     you are in, and Space is the thing that flips it. */
+  #stage[data-ldesign="switch"] #legend { height: 42px; gap: 14px; padding: 0 12px; border-radius: 12px; font-size: 12px; color: #f1f1ee;
+    background: #1b1b1e; box-shadow: 0 12px 32px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.16); }
+  #stage[data-ldesign="switch"] #legend .item + .item::before { display: none; }
+  #stage[data-ldesign="switch"] #legend .sw { display: flex; padding: 3px; border-radius: 8px; background: rgba(255,255,255,.08); }
+  #stage[data-ldesign="switch"] #legend .sw span { padding: 6px 12px; border-radius: 6px; color: rgba(241,241,238,.6); }
+  #stage[data-ldesign="switch"] #legend .sw span.on { background: #f1f1ee; color: #111; font-weight: 600; }
+
+  /* A+E: the pill's surface and weight (A) with the mode switch (E). Four toggles:
+     data-aekey (Space on the segment or beside it), data-aeverb (say what to do),
+     data-aemotion (thumb slides or snaps), data-aesize (full or compact). */
+  #stage[data-ldesign="ae"] #legend { height: 44px; gap: 18px; padding: 0 16px 0 8px; border-radius: 14px; font-size: 13px; color: #f1f1ee;
+    background: #1b1b1e; box-shadow: 0 12px 32px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.18); }
+  #stage[data-ldesign="ae"] #legend .item + .item::before,
+  #stage[data-ldesign="ae"] #legend .sw + .item::before { content: ""; position: absolute; left: -10px; top: -8px; bottom: -8px; width: 1px; background: rgba(255,255,255,.18); }
+  #stage[data-ldesign="ae"] #legend .sw + .item { position: relative; }
+  #stage[data-ldesign="ae"] #legend kbd { font-size: 12px; padding: 6px 8px; border-radius: 5px; background: rgba(255,255,255,.2); box-shadow: inset 0 -1px 0 rgba(255,255,255,.28); }
+  #legend .sw { position: relative; display: flex; padding: 3px; border-radius: 10px; background: rgba(255,255,255,.08); }
+  #legend .sw .thumb { position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: 7px; background: #f1f1ee;
+    transition: transform 160ms cubic-bezier(.2,.8,.2,1), width 160ms cubic-bezier(.2,.8,.2,1); }
+  #stage[data-aemotion="snap"] #legend .sw .thumb { transition: none; }
+  @media (prefers-reduced-motion: reduce) { #legend .sw .thumb { transition: none; } }
+  #legend .sw .opt { position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 7px;
+    color: rgba(241,241,238,.62); font-weight: 500; }
+  #legend .sw .opt.on { color: #111; font-weight: 600; }
+  #legend .sw .opt kbd { padding: 4px 6px !important; font-size: 11px !important; }
+  #legend .sw .opt.on kbd { display: none; }
+  #stage[data-aekey="sep"] #legend .sw .opt kbd { display: none; }
+  /* Compact: the switch and Esc only, for a legend that follows the pointer. */
+  #stage[data-ldesign="ae"][data-aesize="compact"] #legend { height: 36px; gap: 12px; padding: 0 10px 0 5px; font-size: 12px; border-radius: 11px; }
+  #stage[data-ldesign="ae"][data-aesize="compact"] #legend .sw .opt { padding: 5px 10px; }
+  #stage[data-ldesign="ae"][data-aesize="compact"] #legend kbd { font-size: 11px; padding: 4px 6px; }
+
+  /* F. Keys only: no surface. Light keycaps with the label beneath, like a game HUD. */
+  #stage[data-ldesign="keys"] #legend { height: auto; gap: 20px; padding: 0; border-radius: 0; background: none; box-shadow: none; font-size: 12px; color: #fff; }
+  #stage[data-ldesign="keys"] #legend .item { flex-direction: column; gap: 7px; text-shadow: 0 1px 4px rgba(0,0,0,.75); }
+  #stage[data-ldesign="keys"] #legend .item + .item::before { display: none; }
+  #stage[data-ldesign="keys"] #legend kbd { font-size: 12px; padding: 6px 10px; border-radius: 6px; background: #f1f1ee; color: #111;
+    box-shadow: 0 2px 0 rgba(0,0,0,.4), 0 6px 14px rgba(0,0,0,.4); }
+
+  /* ---- the knobs --------------------------------------------------------- */
+  aside { padding: 18px 16px; background: #181818; border-left: 1px solid #2a2a2a; overflow: auto; }
+  aside h1 { font-size: 13px; margin: 0 0 2px; color: #fff; }
+  aside p { margin: 0 0 14px; color: #888; font-size: 12px; }
+  fieldset { border: 0; padding: 0; margin: 0 0 14px; }
+  legend { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #777; padding: 0; margin-bottom: 6px; }
+  label { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 0; color: #ccc; }
+  label output { font: 11px var(--mono); color: #888; min-width: 44px; text-align: right; }
+  input[type=range] { width: 100%; accent-color: #7aa2ff; }
+  .seg { display: grid; grid-auto-flow: column; gap: 2px; background: #222; padding: 2px; border-radius: 8px; }
+  .seg button { all: unset; text-align: center; padding: 5px 2px; font-size: 11px; border-radius: 6px; cursor: pointer; font-size: 12px; color: #aaa; }
+  .seg button[aria-pressed="true"] { background: #333; color: #fff; }
+  .seg button:focus-visible, .act:focus-visible { outline: 2px solid #4f86ff; outline-offset: 1px; }
+  .seg.col { grid-auto-flow: row; }
+  .seg.col button { text-align: left; padding: 6px 8px; }
+  details { margin-bottom: 14px; } summary { cursor: pointer; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #777; margin-bottom: 8px; }
+  .act { all: unset; cursor: pointer; display: block; text-align: center; padding: 7px; border-radius: 8px; background: #2b2b2b; color: #eee; margin-bottom: 6px; }
+  .act:hover { background: #353535; }
+  kbd { font: 11px var(--mono); background: #2b2b2b; padding: 2px 5px; border-radius: 4px; color: #ddd; }
+  #rm { font-size: 11px; color: #888; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage" data-desk="light" data-mode="region" data-edge="current" data-wdim="on" data-ldesign="ae" data-aekey="seg" data-aeverb="off" data-aemotion="slide" data-aesize="full" data-lenter="none" data-lphase="select" data-guides="on" data-gstyle="paired" tabindex="0" aria-label="Fake desktop with the selection overlay">
+    <div class="menubar"></div>
+    <div class="win" id="w1" style="left:6%;top:12%;width:42%;height:46%"><header><i></i><i></i><i></i><span>Notes</span></header><div class="body"><b style="width:80%"></b><b></b><b style="width:90%"></b><b style="width:55%"></b><b></b><b style="width:70%"></b></div></div>
+    <div class="win" id="w2" style="left:40%;top:30%;width:50%;height:52%"><header><i></i><i></i><i></i><span>Browser</span></header><div class="body"><b></b><b style="width:60%"></b><b></b><b style="width:85%"></b><b></b><b style="width:40%"></b><b></b></div></div>
+    <div class="win" id="w3" style="left:12%;top:58%;width:30%;height:30%"><header><i></i><i></i><i></i><span>Terminal</span></header><div class="body"><b style="width:45%"></b><b style="width:70%"></b><b style="width:30%"></b></div></div>
+
+    <div id="ov">
+      <div id="scrim"></div>
+      <div id="marquee"></div>
+      <div id="gv"></div><div id="gh"></div>
+      <div id="wcut"><div class="tint"></div></div>
+      <div id="size" class="chip"></div>
+      <div id="title" class="chip"></div>
+      <div id="legend"></div>
+    </div>
+  </div>
+
+  <aside>
+    <h1>The scrim</h1>
+    <p>Change one knob at a time. Everything starts as Capture does today, except that window mode already dims. Fade knobs replay themselves.</p>
+
+    <fieldset><legend>Mode (Space)</legend>
+      <div class="seg" id="seg-mode"><button data-v="region" aria-pressed="true">Area</button><button data-v="window" aria-pressed="false">Window</button></div></fieldset>
+
+    <fieldset><legend>Desktop under it</legend>
+      <div class="seg" id="seg-desk"><button data-v="light" aria-pressed="true">Light</button><button data-v="dark" aria-pressed="false">Dark</button></div></fieldset>
+
+    <fieldset><legend>Legend design (all but Today sit near the action)</legend>
+      <div class="seg col" id="seg-ldesign">
+        <button data-v="ae" aria-pressed="true">A+E · Switch in the pill</button>
+        <button data-v="today" aria-pressed="false">Today: pinned to the bottom</button>
+        <button data-v="pill" aria-pressed="false">A · Pill, stronger</button>
+        <button data-v="tag" aria-pressed="false">B · Tag, two keys only</button>
+        <button data-v="card" aria-pressed="false">C · Card, vertical list</button>
+        <button data-v="docked" aria-pressed="false">D · Docked under the selection</button>
+        <button data-v="switch" aria-pressed="false">E · Mode switch</button>
+        <button data-v="keys" aria-pressed="false">F · Keys only, no surface</button>
+      </div>
+      <div class="seg" id="seg-lenter" style="margin-top:8px"><button data-v="none" aria-pressed="true">Static</button><button data-v="settle" aria-pressed="false">Glow, then quiet while dragging</button></div>
+      <div class="seg" id="seg-lphase" style="margin-top:6px"><button data-v="select" aria-pressed="true">Select copy</button><button data-v="options" aria-pressed="false">Options copy</button></div>
+    </fieldset>
+
+    <fieldset><legend>A+E toggles</legend>
+      <div class="seg" id="seg-aekey" style="margin-bottom:6px"><button data-v="seg" aria-pressed="true">Space on the segment</button><button data-v="sep" aria-pressed="false">Space beside</button></div>
+      <div class="seg" id="seg-aeverb" style="margin-bottom:6px"><button data-v="off" aria-pressed="true">No verb</button><button data-v="on" aria-pressed="false">Says what to do</button></div>
+      <div class="seg" id="seg-aemotion" style="margin-bottom:6px"><button data-v="slide" aria-pressed="true">Thumb slides</button><button data-v="snap" aria-pressed="false">Snaps</button></div>
+      <div class="seg" id="seg-aesize"><button data-v="full" aria-pressed="true">Full</button><button data-v="compact" aria-pressed="false">Compact</button></div>
+    </fieldset>
+
+    <fieldset><legend>Guide lines (before the drag)</legend>
+      <div class="seg" id="seg-guides" style="margin-bottom:6px"><button data-v="on" aria-pressed="true">On</button><button data-v="off" aria-pressed="false">Off</button></div>
+      <div class="seg" id="seg-gstyle" style="margin-bottom:6px"><button data-v="paired" aria-pressed="true">Paired</button><button data-v="solid" aria-pressed="false">Solid</button></div>
+      <label>Opacity <output id="o-ga">.30</output></label>
+      <input type="range" id="k-ga" min="5" max="80" value="30" aria-label="Guide line opacity">
+    </fieldset>
+
+    <details><summary>Scrim knobs</summary>
+    <fieldset><legend>Knobs</legend>
+      <label>Dim <output id="o-dim">.42</output></label>
+      <input type="range" id="k-dim" min="0" max="70" value="42" aria-label="Dim level">
+      <label>Fade in <output id="o-in">0 ms</output></label>
+      <input type="range" id="k-in" min="0" max="400" step="20" value="0" aria-label="Fade in milliseconds">
+      <label>Fade out <output id="o-out">0 ms</output></label>
+      <input type="range" id="k-out" min="0" max="400" step="20" value="0" aria-label="Fade out milliseconds">
+    </fieldset>
+
+    <fieldset><legend>Edge (area, and window when it dims)</legend>
+      <div class="seg" id="seg-edge"><button data-v="current" aria-pressed="true">1px (today)</button><button data-v="paired" aria-pressed="false">Paired</button><button data-v="bold" aria-pressed="false">2px</button><button data-v="accent" aria-pressed="false">Accent</button><button data-v="none" aria-pressed="false">None</button></div></fieldset>
+
+    <fieldset><legend>Window mode dims the rest</legend>
+      <div class="seg" id="seg-wdim"><button data-v="off" aria-pressed="false">Off (today)</button><button data-v="on" aria-pressed="true">On</button></div></fieldset>
+
+    </details>
+
+    <button class="act" id="replay">Replay entrance <kbd>R</kbd></button>
+    <button class="act" id="dismiss">Dismiss <kbd>Esc</kbd></button>
+    <div id="rm"></div>
+  </aside>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const stage = $("stage"), ov = $("ov"), marquee = $("marquee"), wcut = $("wcut");
+  const sizeChip = $("size"), titleChip = $("title"), legend = $("legend");
+  const root = document.documentElement;
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)");
+  const HANDLES = ["nw","n","ne","e","se","s","sw","w"];
+  const handles = HANDLES.map((h) => { const d = document.createElement("div"); d.className = "handle " + h; d.style.display = "none"; ov.appendChild(d); return [h, d]; });
+
+  // ---- knobs -----------------------------------------------------------
+  // Reduced motion: the app swaps glides for a short fade; here a fade stays a
+  // fade but is capped, so the knob cannot be used to make it slow.
+  function applyDurations() {
+    const cap = reduce.matches ? 120 : Infinity;
+    const i = Math.min(+$("k-in").value, cap), o = Math.min(+$("k-out").value, cap);
+    root.style.setProperty("--fade-in", i + "ms");
+    root.style.setProperty("--fade-out", o + "ms");
+    $("o-in").textContent = $("k-in").value + " ms"; $("o-out").textContent = $("k-out").value + " ms";
+    $("rm").textContent = reduce.matches ? "Reduced motion is on: fades are capped at 120 ms." : "";
+  }
+  $("k-dim").addEventListener("input", (e) => {
+    const a = (+e.target.value / 100).toFixed(2);
+    root.style.setProperty("--scrim-a", a); $("o-dim").textContent = a.replace(/^0/, "");
+  });
+  // A fade knob demonstrates itself: moving Fade in replays the entrance; moving
+  // Fade out dismisses, then brings the scrim back once the exit has played.
+  let demo = 0;
+  $("k-in").addEventListener("input", () => { applyDurations(); clearTimeout(demo); show(); });
+  $("k-out").addEventListener("input", () => {
+    applyDurations(); clearTimeout(demo); dismiss();
+    demo = setTimeout(show, Math.min(+$("k-out").value, reduce.matches ? 120 : 1e9) + 600);
+  });
+  reduce.addEventListener("change", applyDurations);
+  applyDurations();
+
+  function seg(id, attr, after) {
+    const el = $(id);
+    el.addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      el.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      stage.dataset[attr] = b.dataset.v; b.blur(); if (after) after();
+    });
+  }
+  seg("seg-desk", "desk"); seg("seg-edge", "edge"); seg("seg-wdim", "wdim");
+  seg("seg-mode", "mode", () => { wcut.style.display = "none"; titleChip.style.display = "none"; syncHint(); });
+
+  function setMode(m) { $("seg-mode").querySelector(`[data-v="${m}"]`).click(); }
+  // The words, as legend.ts decides them in the app.
+  function legendItems() {
+    if (stage.dataset.lphase === "options") return [[[], "Adjust selection"], [["Click"], "Capture Video"], [["Esc"], "cancel"]];
+    return stage.dataset.mode === "window"
+      ? [[["Click"], "select window"], [["Space"], "region"], [["Esc"], "cancel"]]
+      : [[["Drag"], "region"], [["Space"], "window"], [["Esc"], "cancel"]];
+  }
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
+  const itemEl = (keys, label) => { const n = el("span", "item"); keys.forEach((k) => n.append(el("kbd", "", k))); if (label) n.append(label); return n; };
+  let settleTimer = 0;
+  // A+E builds once per signature and then updates in place, so the thumb can slide.
+  function buildAE() {
+    const d = stage.dataset, compact = d.aesize === "compact", kbdIn = d.aekey === "seg";
+    const mk = (m, label) => { const o = el("span", "opt"); o.dataset.m = m; o.append(el("kbd", "", "Space"), label); return o; };
+    const sw = el("span", "sw"); sw.append(el("i", "thumb"), mk("region", "Area"), mk("window", "Window"));
+    const kids = [sw];
+    if (!kbdIn) kids.push(itemEl(["Space"], compact ? "" : "switch"));
+    if (d.aeverb === "on" && !compact) { const v = el("span", "item verb"); v.append(el("kbd"), document.createTextNode("")); kids.push(v); }
+    kids.push(itemEl(["Esc"], compact ? "" : "cancel"));
+    legend.replaceChildren(...kids);
+  }
+  function updateAE() {
+    const win = stage.dataset.mode === "window";
+    const sw = legend.querySelector(".sw"), thumb = sw.querySelector(".thumb");
+    sw.querySelectorAll(".opt").forEach((o) => o.classList.toggle("on", (o.dataset.m === "window") === win));
+    const verb = legend.querySelector(".verb");
+    if (verb) { verb.firstChild.textContent = win ? "Click" : "Drag"; verb.lastChild.textContent = win ? "select window" : "select area"; }
+    const on = sw.querySelector(".opt.on");
+    thumb.style.width = on.offsetWidth + "px"; thumb.style.transform = `translateX(${on.offsetLeft}px)`;
+  }
+  function syncHint() {
+    const d = stage.dataset.ldesign, win = stage.dataset.mode === "window", opts = stage.dataset.lphase === "options";
+    if (d === "ae" && !opts) {
+      const sig = [d, stage.dataset.aekey, stage.dataset.aeverb, stage.dataset.aesize].join();
+      legend.classList.add("show");
+      if (legend.dataset.sig !== sig || !legend.querySelector(".sw")) {
+        legend.dataset.sig = sig; buildAE();
+        const t = legend.querySelector(".thumb"); t.style.transition = "none"; updateAE(); void t.offsetWidth; t.style.transition = "";
+      } else updateAE();
+      placeLegend(); return;
+    }
+    legend.dataset.sig = "";
+    let kids;
+    if (d === "tag") {
+      kids = opts ? [itemEl(["Click"], "Capture"), itemEl(["Esc"], "")] : [itemEl(["Space"], win ? "area" : "window"), itemEl(["Esc"], "")];
+    } else if (d === "switch" && !opts) {
+      const sw = el("span", "sw"); sw.append(el("span", win ? "" : "on", "Area"), el("span", win ? "on" : "", "Window"));
+      kids = [sw, itemEl(["Space"], "switch"), itemEl(["Esc"], "cancel")];
+    } else {
+      kids = legendItems().map(([keys, label]) => itemEl(keys, label));
+      if (d === "docked") kids.unshift(el("span", "size"));
+    }
+    legend.replaceChildren(...kids);
+    legend.classList.add("show"); placeLegend();
+  }
+  // Near the action: under the pointer until there is a selection, then under the selection.
+  let pointer = { x: 120, y: 120 };
+  function placeLegend() {
+    const d = stage.dataset.ldesign;
+    if (d === "today") { legend.style.left = legend.style.top = ""; legend.classList.remove("floating"); return; }
+    const W = stage.clientWidth, H = stage.clientHeight, w = legend.offsetWidth, h = legend.offsetHeight;
+    const hasSel = sel && stage.classList.contains("has-selection") && stage.dataset.mode === "region";
+    const sz = legend.querySelector(".size"); if (sz) sz.textContent = hasSel ? Math.round(sel.w) + " × " + Math.round(sel.h) : "";
+    let x, y, docked = false;
+    if (hasSel) {
+      if (d === "docked" && sel.y + sel.h + h <= H - 4) { x = sel.x; y = sel.y + sel.h; docked = true; }
+      else { x = sel.x; y = sel.y + sel.h + 14; if (y + h > H - 8) y = sel.y - h - 14; }
+    } else { x = pointer.x + 22; y = pointer.y + 26; if (y + h > H - 8) y = pointer.y - h - 18; }
+    legend.classList.toggle("floating", !docked);
+    legend.style.left = Math.max(8, Math.min(x, W - w - 8)) + "px";
+    legend.style.top = Math.max(30, y) + "px";
+  }
+  // Entrance: a glow for the first 2.5 s. Optionally the legend goes quiet once you start dragging.
+  function legendEntrance() {
+    clearTimeout(settleTimer); legend.classList.remove("emph");
+    if (stage.dataset.lenter !== "settle") return;
+    legend.classList.add("emph");
+    settleTimer = setTimeout(() => legend.classList.remove("emph"), 2500);
+  }
+  seg("seg-ldesign", "ldesign", syncHint);
+  seg("seg-lenter", "lenter", legendEntrance);
+  seg("seg-lphase", "lphase", syncHint);
+  for (const id of ["aekey", "aeverb", "aemotion", "aesize"]) seg("seg-" + id, id, syncHint);
+  seg("seg-guides", "guides");
+  seg("seg-gstyle", "gstyle");
+  const gv = $("gv"), gh = $("gh"), kga = $("k-ga");
+  function setGA() { stage.style.setProperty("--ga", kga.value / 100); $("o-ga").textContent = "." + String(kga.value).padStart(2, "0"); }
+  kga.addEventListener("input", setGA); setGA();
+  stage.addEventListener("pointermove", (e) => {
+    const r = stage.getBoundingClientRect(); pointer = { x: e.clientX - r.left, y: e.clientY - r.top };
+    stage.classList.add("has-pointer");
+    gv.style.left = Math.round(pointer.x) + "px"; gh.style.top = Math.round(pointer.y) + "px";
+    placeLegend();
+  });
+  stage.addEventListener("pointerleave", () => stage.classList.remove("has-pointer"));
+
+  // ---- entrance / exit ---------------------------------------------------
+  function show() { stage.classList.remove("has-selection"); clearSel(); ov.classList.remove("on"); void ov.offsetWidth; ov.classList.add("on"); syncHint(); legendEntrance(); }
+  function dismiss() { ov.classList.remove("on"); }
+  $("replay").onclick = show; $("dismiss").onclick = dismiss;
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape") dismiss();
+    else if (e.key.toLowerCase() === "r") show();
+    else if (e.key === " ") { e.preventDefault(); setMode(stage.dataset.mode === "region" ? "window" : "region"); }
+  });
+
+  // ---- area mode: drag a rectangle --------------------------------------
+  let sel = null, drag = null;
+  function clearSel() { sel = null; marquee.style.display = ""; sizeChip.style.display = "none"; handles.forEach(([, h]) => h.style.display = "none"); }
+  function paintSel() {
+    if (!sel) return;
+    Object.assign(marquee.style, { left: sel.x + "px", top: sel.y + "px", width: sel.w + "px", height: sel.h + "px" });
+    const hx = { w: sel.x, n: sel.x + sel.w / 2, e: sel.x + sel.w }, hy = { n: sel.y, w: sel.y + sel.h / 2, s: sel.y + sel.h };
+    handles.forEach(([h, d]) => {
+      d.style.display = drag || stage.classList.contains("has-selection") ? "block" : "none";
+      d.style.left = (h.includes("w") ? hx.w : h.includes("e") ? hx.e : hx.n) + "px";
+      d.style.top = (h.includes("n") ? hy.n : h.includes("s") ? hy.s : hy.w) + "px";
+    });
+    sizeChip.textContent = Math.round(sel.w) + " × " + Math.round(sel.h);
+    sizeChip.style.display = "block";
+    sizeChip.style.left = sel.x + "px"; sizeChip.style.top = Math.max(30, sel.y - 28) + "px";
+    placeLegend();
+  }
+  stage.addEventListener("pointerdown", (e) => {
+    if (stage.dataset.mode !== "region" || !ov.classList.contains("on")) return;
+    const r = stage.getBoundingClientRect();
+    drag = { x0: e.clientX - r.left, y0: e.clientY - r.top }; stage.classList.add("dragging"); stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener("pointermove", (e) => {
+    const r = stage.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+    if (drag) {
+      sel = { x: Math.min(drag.x0, px), y: Math.min(drag.y0, py), w: Math.abs(px - drag.x0), h: Math.abs(py - drag.y0) };
+      if (sel.w > 2 || sel.h > 2) { stage.classList.add("has-selection"); paintSel(); }
+    } else if (stage.dataset.mode === "window" && ov.classList.contains("on")) {
+      const w = [...stage.querySelectorAll(".win")].reverse().find((n) => { const b = n.getBoundingClientRect(); return e.clientX >= b.left && e.clientX <= b.right && e.clientY >= b.top && e.clientY <= b.bottom; });
+      if (!w) { wcut.style.display = "none"; titleChip.style.display = "none"; return; }
+      const b = w.getBoundingClientRect();
+      Object.assign(wcut.style, { display: "block", left: b.left - r.left + "px", top: b.top - r.top + "px", width: b.width + "px", height: b.height + "px" });
+      titleChip.textContent = w.querySelector("header span").textContent;
+      Object.assign(titleChip.style, { display: "block", left: b.left - r.left + "px", top: Math.max(30, b.top - r.top - 28) + "px" });
+    }
+  });
+  stage.addEventListener("pointerup", () => { drag = null; stage.classList.remove("dragging"); paintSel(); placeLegend(); });
+
+  // ---- start ---------------------------------------------------------
+  show();
+})();
+</script>
+</body>
+</html>
