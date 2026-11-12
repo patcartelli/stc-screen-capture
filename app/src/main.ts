@@ -5,7 +5,7 @@ import {
 import { readSettings, stripMainOnly, writeSettings, type Settings } from "./settings.js";
 import { rememberArea, resolvePreviousArea, type ConnectedDisplay } from "./previous-area.js";
 import {
-  SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, resetOfferText, resetToNewDefaults, planShortcuts, planOutcomeVariants, isShotAction,
+  SHOT_ACTIONS, BINDABLE_ACTIONS, DEFAULT_SHORTCUTS, SHORTCUT_DEFAULTS_GENERATION, resetOfferText, resetToNewDefaults, planShortcuts, planOutcomeVariants, isShotAction,
   type Outcome, type OutcomeVariantReport,
   type ShotAction, type BindableAction, type ShortcutReport, type Shortcuts,
 } from "./hotkeys.js";
@@ -534,13 +534,14 @@ function setDockVisible(visible: boolean): void {
 
 /**
  * STC-582's one-time question: keys still on a superseded default can move to
- * the new ones. Asked once (`shortcutsOffered`), whatever the answer, and only
- * when there is something to move. Per key — a key the user changed stays.
+ * the new ones. Asked once per set of defaults (`shortcutsOffered` holds the
+ * last `SHORTCUT_DEFAULTS_GENERATION` asked, STC-645), whatever the answer, and
+ * only when there is something to move. Per key — a key the user changed stays.
  */
 async function offerNewShortcutDefaults(): Promise<void> {
   const dir = app.getPath("userData");
   const settings = readSettings(dir);
-  if (settings.shortcutsOffered) return;
+  if (settings.shortcutsOffered >= SHORTCUT_DEFAULTS_GENERATION) return;
   const offer = resetOfferText(settings.shortcuts);
   // Nothing to move: no question, and no write either — a launch that changes
   // nothing must not create `settings.json`.
@@ -555,7 +556,7 @@ async function offerNewShortcutDefaults(): Promise<void> {
   });
   // One write for either answer, so "asked" and "reset" cannot disagree.
   const saved = writeSettings(dir, {
-    shortcutsOffered: true,
+    shortcutsOffered: SHORTCUT_DEFAULTS_GENERATION,
     ...(response === 0 ? { shortcuts: resetToNewDefaults(settings.shortcuts) } : {}),
   });
   if (response === 0) applyShortcuts(saved.shortcuts);

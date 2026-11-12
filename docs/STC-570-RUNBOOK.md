@@ -12,13 +12,13 @@ Settings > Shortcuts > **Shot Previous Area** ships unbound. Bind it (for exampl
 
 ## 1. After a Shot Area
 
-1. Shot Area (⌥⌘1), drag a rectangle, finish. The panel appears.
+1. Shot Area (⇧⌘4), drag a rectangle, finish. The panel appears.
 2. Press the new shortcut. **Expected:** the same rectangle is shot at once, no overlay, no drag. Compare the two shots' pixel sizes.
 3. Hold ⇧ with it. **Expected:** the clipboard outcome, as for Shot Area.
 
 ## 2. After a region recording
 
-1. Record (⌥⌘4), drag a different rectangle, record a few seconds, stop.
+1. Record (⇧⌘5), drag a different rectangle, record a few seconds, stop.
 2. Press the new shortcut. **Expected:** a shot of the recording's rectangle as a still, no drag.
 3. A window shot or a window recording in between must NOT change what the shortcut retakes.
 

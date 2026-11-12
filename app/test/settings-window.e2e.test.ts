@@ -86,8 +86,37 @@ describe("the Settings window", () => {
     expect(await settings.locator("#shortcuts-recording #shortcut-record").count()).toBe(1);
     expect(await settings.locator("#shortcuts-shots #shortcut-record").count()).toBe(0);
     expect(await settings.locator("#shortcuts-shots .shortcut").count()).toBe(5);   // + Shot Previous Area (STC-570)
-    expect(await settings.textContent("#pane-shortcuts .note"))
-      .toBe("Registered means Capture holds the key. Another app can still share it.");
+    // Both notes sit above the groups, since they cover every group (STC-645).
+    expect(await settings.locator("#pane-shortcuts .note").allTextContents()).toEqual([
+      "To use the macOS screenshot keys here, turn off macOS's own first: System Settings › Keyboard › Keyboard Shortcuts › Screenshots.",
+      "Registered means Capture holds the key. Another app can still share it.",
+    ]);
+    expect(await settings.locator("#pane-shortcuts > .section").first().getAttribute("id")).toBe("shortcuts-notes");
+  }, 60_000);
+
+  test("a row waiting on Press keys ends on a click away or a pane switch (STC-645)", async () => {
+    const win = await launch(fresh());
+    const settings = await openSettings(app!, win, "shortcuts");
+    const region = settings.locator("#shortcut-region");
+    await expect.poll(() => region.textContent(), { timeout: 10_000 }).toBe("⇧⌘4");
+
+    // A click on empty pane space ends the wait and puts the key back.
+    await region.click();
+    expect(await region.textContent()).toBe("Press keys…");
+    await settings.locator("#shortcuts-notes").click();
+    expect(await region.textContent()).toBe("⇧⌘4");
+    expect(await region.getAttribute("aria-pressed")).toBe("false");
+
+    // A click on ANOTHER keycap moves the wait there in one click.
+    await region.click();
+    await settings.locator("#shortcut-window").click();
+    expect(await region.textContent()).toBe("⇧⌘4");
+    expect(await settings.locator("#shortcut-window").textContent()).toBe("Press keys…");
+
+    // Switching pane ends it, and a key typed after is not taken as a binding.
+    await settings.click('#sidebar button[data-pane="capture"]');
+    await settings.click('#sidebar button[data-pane="shortcuts"]');
+    expect(await settings.locator("#shortcut-window").textContent()).toBe("⇧⌘2");
   }, 60_000);
 
   test("Show diagnostics in Settings shows the library's diagnostics strip", async () => {

@@ -135,11 +135,14 @@ export interface Settings {
    */
   capturePrimed: boolean;
   /**
-   * Whether the one-time "Reset to new defaults" question (STC-582) has been
-   * asked. Main's alone, like `capturePrimed`: set whatever the answer was, so
-   * a user who kept their old keys is never asked again.
+   * Which defaults the one-time "Reset to new defaults" question (STC-582) was
+   * last asked for: a `SHORTCUT_DEFAULTS_GENERATION`, 0 for never. Main's
+   * alone, like `capturePrimed`: set whatever the answer was, so a user who
+   * kept their old keys is not asked again until the defaults change again.
+   * A number since STC-645; a file from before holds `true`, which reads as 1
+   * (STC-582's), so STC-582's answer does not silence STC-645's question.
    */
-  shortcutsOffered: boolean;
+  shortcutsOffered: number;
   /**
    * Where the library window was when it last closed (STC-560), or null for
    * never. Main's alone, like `capturePrimed`: written from the window's own
@@ -300,6 +303,15 @@ function cleanLastBackgroundLook(v: unknown): LookWrite | null {
 }
 
 /**
+ * `shortcutsOffered` as stored: a whole generation number, or STC-582's `true`
+ * (which was generation 1). Anything else is "never asked".
+ */
+export function cleanShortcutsOffered(v: unknown): number {
+  if (v === true) return 1;
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : 0;
+}
+
+/**
  * `recorder:setSettings`'s first step: the keys only main writes. Destructured
  * rather than deleted, so each is named here and a reader can see exactly which
  * do not survive a renderer's patch.
@@ -319,7 +331,7 @@ export const DEFAULT_SETTINGS: Settings = {
   previewMuted: false,
   framingGuides: false,
   capturePrimed: false,
-  shortcutsOffered: false,
+  shortcutsOffered: 0,
   libraryWindow: null,
   previousAreas: NO_PREVIOUS_AREAS,
   windowShotLook: "wallpaper",
@@ -491,7 +503,7 @@ export function readSettings(dir: string): Settings {
     previewMuted: doc.previewMuted === true,
     framingGuides: doc.framingGuides === true,
     capturePrimed: doc.capturePrimed === true,
-    shortcutsOffered: doc.shortcutsOffered === true,
+    shortcutsOffered: cleanShortcutsOffered(doc.shortcutsOffered),
     libraryWindow: cleanWindowBounds(doc.libraryWindow),
     previousAreas: cleanPreviousAreas(doc.previousAreas),
     windowShotLook: cleanWindowShotLook(doc.windowShotLook),
@@ -546,7 +558,7 @@ export function writeSettings(dir: string, patch: Partial<Settings>): Settings {
     previewMuted: merged.previewMuted === true,
     framingGuides: merged.framingGuides === true,
     capturePrimed: merged.capturePrimed === true,
-    shortcutsOffered: merged.shortcutsOffered === true,
+    shortcutsOffered: cleanShortcutsOffered(merged.shortcutsOffered),
     libraryWindow: cleanWindowBounds(merged.libraryWindow),
     previousAreas: cleanPreviousAreas(merged.previousAreas),
     windowShotLook: cleanWindowShotLook(merged.windowShotLook),

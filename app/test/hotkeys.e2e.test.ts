@@ -101,7 +101,7 @@ describe("the capture shortcuts", () => {
       await expect.poll(() => win.getAttribute(`#shortcutwhy-${action}`, "data-state"), { timeout: 15_000 })
         .toBe("registered");
     }
-    expect(await win.textContent("#shortcut-region")).toBe("⌥⌘1");
+    expect(await win.textContent("#shortcut-region")).toBe("⇧⌘4");
   }, 120_000);
 
   test("a rebinding registers the new key, releases the old one, and survives a relaunch", async () => {
@@ -134,7 +134,7 @@ describe("the capture shortcuts", () => {
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/macOS/);
     // The previous binding stays live and stays shown.
-    expect(await win.textContent("#shortcut-window")).toBe("⌥⌘2");
+    expect(await win.textContent("#shortcut-window")).toBe("⇧⌘2");
     expect(await isRegistered(DEFAULT_SHORTCUTS.window!)).toBe(true);
     // Nothing was written AT ALL: a refused binding is not a change. Reading
     // the file back would not discriminate — `writeSettings` normalises a bad
@@ -153,7 +153,7 @@ describe("the capture shortcuts", () => {
     const { win } = await launch({ userData });
     const r = await win.evaluate(() =>
       (window as any).settingsBridge.setShortcut("window", "Command+Space"));
-    expect(r.shortcuts.window).toBe("Alt+Command+2");
+    expect(r.shortcuts.window).toBe("Shift+Command+2");
     expect(r.report.find((x: any) => x.action === "window"))
       .toMatchObject({ problem: "reserved", registered: false });
     expect(await isRegistered(DEFAULT_SHORTCUTS.window!)).toBe(true);
@@ -186,7 +186,7 @@ describe("the capture shortcuts", () => {
     await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌃⌥⇧F9");
 
     await win.click("#resetshortcuts");
-    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⌥⌘1");
+    await expect.poll(() => win.textContent("#shortcut-region"), { timeout: 15_000 }).toBe("⇧⌘4");
     // The tools ship unbound (STC-627, STC-572): null is no key to register.
     for (const accelerator of Object.values(DEFAULT_SHORTCUTS).filter((a) => a !== null)) {
       expect(await isRegistered(accelerator!), accelerator!).toBe(true);
@@ -197,7 +197,7 @@ describe("the capture shortcuts", () => {
   test("a second action cannot take a key the first already has", async () => {
     const { win } = await launch();
     // Area's own default, spelled differently (the grammar is normalised).
-    await rebind(win, "window", "Alt+Meta+1");
+    await rebind(win, "window", "Meta+Shift+4");
     await expect.poll(() => win.textContent("#shortcutwhy-window"), { timeout: 15_000 })
       .toMatch(/already uses this/);
     // And the first action keeps it.

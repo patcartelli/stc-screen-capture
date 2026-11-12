@@ -86,7 +86,7 @@ describe("the menu", () => {
     // Electron does the ⌃⌥⇧⌘ substitution itself; handing it glyphs would put
     // a string it cannot parse where it expects a binding.
     const [region] = trayTemplate({ shortcuts: DEFAULT_SHORTCUTS });
-    expect(region!.accelerator).toBe("Alt+Command+1");
+    expect(region!.accelerator).toBe("Shift+Command+4");
   });
 
   test("an unbound action shows no accelerator at all", () => {
