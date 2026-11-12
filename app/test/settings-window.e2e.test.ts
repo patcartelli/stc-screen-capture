@@ -66,7 +66,7 @@ describe("the Settings window", () => {
     const settings = await openSettings(app!, win);
     const sections: Record<string, string[]> = {
       capture: ["App", "After a shot", "Windows", "Recording"],
-      camera: ["Preview", "Shape", "Style"],
+      camera: ["Preview", "Shape", "Framing", "Style"],
       shortcuts: ["Shots", "Tools", "Recording"],
       output: ["Locations", "Storage", "GIF"],
       advanced: ["Diagnostics"],

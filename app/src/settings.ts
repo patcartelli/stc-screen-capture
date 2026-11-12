@@ -21,7 +21,7 @@ import {
 import { type GifSettings, DEFAULT_GIF_SETTINGS, cleanGifSettings } from "@transform/gif-options.js";
 import { parseLookWrite, type LookWrite } from "@transform/backgrounds.js";
 import { isRememberedBackground, type WindowShotLook, WINDOW_SHOT_LOOKS } from "./window-look.js";
-import { cleanPipStyle, DEFAULT_PIP_STYLE, type PipStyle } from "@transform/pip-style.js";
+import { cleanPipStyle, DEFAULT_FRAMING, DEFAULT_PIP_STYLE, type PipStyle } from "@transform/pip-style.js";
 
 /**
  * User preferences, owned by the main process.
@@ -110,7 +110,9 @@ export interface Settings {
   /**
    * The PiP style new camera takes start with (STC-461). Never read at draw
    * time: take-project.ts seeds it into a take's project.json when the take
-   * ends. Never holds a framing — framing is per take.
+   * ends. Its `framing` (STC-642) is the default framing, set in Settings >
+   * Camera against the live view; a take's own Reframe wins once made. A
+   * centred, unzoomed framing is stored as none, so it stays the default.
    */
   pipStyle: PipStyle;
   /**
@@ -452,12 +454,21 @@ function cleanShortcuts(v: unknown): Shortcuts {
   return out;
 }
 
-/** A bad stored style is a preference with no opinion: the default, like every other field here. */
+/**
+ * A bad stored style is a preference with no opinion: the default, like every
+ * other field here. A framing equal to DEFAULT_FRAMING is dropped (STC-642):
+ * it draws what none draws, and keeping it would make an untouched style
+ * read as non-default and be seeded into every take for nothing.
+ */
 function cleanStoredPipStyle(v: unknown): PipStyle {
   const s = cleanPipStyle(v);
   if (!s) return { ...DEFAULT_PIP_STYLE, center: { ...DEFAULT_PIP_STYLE.center } };
-  const { framing: _framing, ...rest } = s;
-  return rest;
+  const f = s.framing;
+  if (f && f.x === DEFAULT_FRAMING.x && f.y === DEFAULT_FRAMING.y && f.zoom === DEFAULT_FRAMING.zoom) {
+    const { framing: _framing, ...rest } = s;
+    return rest;
+  }
+  return s;
 }
 
 const FILE = "settings.json";

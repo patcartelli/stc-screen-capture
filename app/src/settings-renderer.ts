@@ -18,8 +18,9 @@ import {
 } from "./hotkeys.js";
 import { type GifSettings, GIF_FPS_OPTIONS, GIF_WIDTH_OPTIONS } from "@transform/gif-options";
 import {
-  editPipStyle, pipRect, pipSize, snapCenter, PIP_SNAP_THRESHOLD_SCREEN_PX, PIP_SHADOW,
-  PIP_RADIUS_MAX, PIP_WIDTH_MIN, PIP_WIDTH_MAX, type PipEdit, type PipStyle,
+  editPipStyle, framingSource, panFraming, pipRect, pipSize, snapCenter, zoomFraming,
+  PIP_SNAP_THRESHOLD_SCREEN_PX, PIP_SHADOW, PIP_FRAMING_ZOOM_MAX,
+  PIP_RADIUS_MAX, PIP_WIDTH_MIN, PIP_WIDTH_MAX, DEFAULT_FRAMING, type PipEdit, type PipStyle,
 } from "@transform/pip-style.js";
 import { previewLine, type PreviewView } from "./camera-preview.js";
 import type { ToastInput } from "./toast-message.js";
@@ -29,6 +30,7 @@ import { WINDOW_SHOT_LOOKS, type WindowShotLook } from "./window-look.js";
 interface SettingsView {
   shutterSound: boolean;
   pipStyle: PipStyle;
+  framingGuides: boolean;
   countdownMs: number;
   thumbnail: { corner: "top-left" | "top-right" | "bottom-left" | "bottom-right"; skip: boolean };
   showDiagnostics: boolean;
@@ -297,11 +299,22 @@ showDiagnosticsBox.addEventListener("change", () => {
 //
 // The preview is a sample screen with the stored default drawn on it, through
 // the same `pipRect` `render()` uses. The sample screen is 16:9 at 1920 x
-// 1080, so a place or size set here is the one a 1080p take records. No camera
-// is opened to set a preference; framing is per take, so no Reframe.
+// 1080, so a place or size set here is the one a 1080p take records.
+//
+// STC-642: the default FRAMING is set here too, against the live camera
+// (STC-638). Reframe makes a drag on the PiP pan the picture inside the shape
+// instead of moving the PiP; the Zoom slider (or the wheel) zooms; STC-497's
+// thirds guides draw over it. Every bound is pip-style.ts's clampFraming, at
+// the live camera's aspect. Without a live picture there is nothing to frame
+// against, so Reframe and Zoom wait for one. A take's own Reframe wins once made.
 
 const MOCK_CAM = { width: 1280, height: 720 };
+/** The live camera's size, from its last preview frame; the mock until one arrives. */
+let liveCam: { width: number; height: number } | null = null;
+const camSize = () => liveCam ?? MOCK_CAM;
 let pipDefault: PipStyle | null = null;
+let reframing = false;
+let framingGuides = false;
 const stage = $("pipscreen");
 const pipBox = $("pipbox");
 const radiusIn = $("pipradius") as HTMLInputElement;
@@ -329,12 +342,13 @@ function drawPip(): void {
   ($("pipborder") as HTMLInputElement).checked = s.border !== null;
   ($("pipshadow") as HTMLInputElement).checked = s.shadow;
   ($("pipmirror") as HTMLInputElement).checked = s.mirror;
+  drawFramingControls(s);
 
   const frame = stage.getBoundingClientRect();
   if (frame.width === 0) return; // the pane is hidden; drawn again when shown
   const out = mockOut();
   const k = frame.width / out.width;
-  const r = pipRect(s, out, MOCK_CAM);
+  const r = pipRect(s, out, camSize());
   const short = Math.min(r.width, r.height);
   // The border's widthPt x 2 x k assumes a 2x display, close enough for a preview.
   Object.assign(pipBox.style, {
@@ -367,15 +381,21 @@ window.addEventListener("focus", sendPreviewWanted);
 window.addEventListener("blur", sendPreviewWanted);
 
 function drawPreviewFrame(bitmap: ImageBitmap): void {
-  // Cover-fit into the box, like the PiP itself does with the camera's picture.
+  // The PiP's own crop (STC-642): framingSource, the rect render() samples, so
+  // the default framing shows here as a take will record it. The box already
+  // has the crop's aspect (pipRect), so the crop fills it.
+  const cam = { width: bitmap.width, height: bitmap.height };
+  if (!liveCam || liveCam.width !== cam.width || liveCam.height !== cam.height) {
+    liveCam = cam; // the aspect sets the rect PiP's size and every framing bound
+    drawPip();
+  }
   const w = pipBox.clientWidth, h = pipBox.clientHeight;
-  if (!w || !h) return;
+  if (!w || !h || !pipDefault) return;
   if (pipCanvas.width !== w || pipCanvas.height !== h) { pipCanvas.width = w; pipCanvas.height = h; }
   const g = pipCanvas.getContext("2d");
   if (!g) return;
-  const scale = Math.max(w / bitmap.width, h / bitmap.height);
-  const dw = bitmap.width * scale, dh = bitmap.height * scale;
-  g.drawImage(bitmap, (w - dw) / 2, (h - dh) / 2, dw, dh);
+  const src = framingSource(pipDefault, cam);
+  g.drawImage(bitmap, src.x, src.y, src.width, src.height, 0, 0, w, h);
 }
 
 bridge.on("settings:camera-preview", (view: PreviewView) => {
@@ -384,9 +404,11 @@ bridge.on("settings:camera-preview", (view: PreviewView) => {
   pipCanvas.hidden = !live;
   pipSilhouette.hidden = live;
   if (!live) pipCanvas.getContext("2d")?.clearRect(0, 0, pipCanvas.width, pipCanvas.height);
-  const line = previewLine(view);
-  pipBox.title = line;
-  pipBox.setAttribute("aria-label", line ? `Camera position. ${line}` : "Camera position");
+  previewNote = previewLine(view);
+  pipBox.title = previewNote;
+  // Nothing to frame against: leave Reframe, keeping what was already saved.
+  if (!live && reframing) setReframing(false);
+  drawPip();
 });
 bridge.on("settings:camera-frame", (f: { jpeg: string }) => {
   if (previewKind === "off") return;
@@ -397,7 +419,7 @@ bridge.on("settings:camera-frame", (f: { jpeg: string }) => {
 /** live = repaint only (a slider mid-drag); commit = persist, then show what was stored. */
 async function editPip(edit: PipEdit, phase: "live" | "commit"): Promise<void> {
   if (!pipDefault) return;
-  pipDefault = editPipStyle(pipDefault, edit, MOCK_CAM);
+  pipDefault = editPipStyle(pipDefault, edit, camSize());
   drawPip();
   if (phase !== "commit") return;
   try {
@@ -426,9 +448,15 @@ for (const [id, kind] of [["pipborder", "border"], ["pipshadow", "shadow"], ["pi
 }
 
 // Drag the PiP on the preview to place it, snapping to the frame's guides.
+// While reframing, a drag pans the picture instead (framePan, below).
 let pipDrag: { dx: number; dy: number } | null = null;
 pipBox.addEventListener("pointerdown", (e) => {
   if (!pipDefault) return;
+  if (reframing) {
+    framePan = { x: e.clientX, y: e.clientY };
+    pipBox.setPointerCapture(e.pointerId);
+    return;
+  }
   const frame = stage.getBoundingClientRect();
   const out = mockOut();
   const k = frame.width / out.width;
@@ -439,6 +467,11 @@ pipBox.addEventListener("pointerdown", (e) => {
   pipBox.setPointerCapture(e.pointerId);
 });
 pipBox.addEventListener("pointermove", (e) => {
+  if (framePan && pipDefault) {
+    panBy(e.clientX - framePan.x, e.clientY - framePan.y, "live");
+    framePan = { x: e.clientX, y: e.clientY };
+    return;
+  }
   if (!pipDrag || !pipDefault) return;
   const frame = stage.getBoundingClientRect();
   const out = mockOut();
@@ -447,10 +480,15 @@ pipBox.addEventListener("pointermove", (e) => {
     x: ((e.clientX - frame.left) / k - pipDrag.dx) / out.width,
     y: ((e.clientY - frame.top) / k - pipDrag.dy) / out.height,
   };
-  const c = snapCenter(raw, pipSize(pipDefault, out, MOCK_CAM), out, PIP_SNAP_THRESHOLD_SCREEN_PX / k);
+  const c = snapCenter(raw, pipSize(pipDefault, out, camSize()), out, PIP_SNAP_THRESHOLD_SCREEN_PX / k);
   void editPip({ kind: "move", center: c }, "live");
 });
 pipBox.addEventListener("pointerup", () => {
+  if (framePan && pipDefault) {
+    framePan = null;
+    void setFraming(pipDefault.framing, "commit");
+    return;
+  }
   if (!pipDrag || !pipDefault) return;
   pipDrag = null;
   void editPip({ kind: "move", center: pipDefault.center }, "commit");
@@ -468,8 +506,14 @@ pipBox.addEventListener("keydown", (e) => {
   const dir = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, [number, number]>)[e.key];
   if (!dir || !pipDefault) return;
   e.preventDefault();
+  if (reframing) {
+    // The picture moves the way the arrow points, as a drag moves it.
+    const step = (e.shiftKey ? PIP_NUDGE_SHIFT : PIP_NUDGE) * pipBox.clientWidth;
+    panBy(dir[0] * step, dir[1] * step, "live");
+    return;
+  }
   const out = mockOut();
-  const size = pipSize(pipDefault, out, MOCK_CAM);
+  const size = pipSize(pipDefault, out, camSize());
   const step = e.shiftKey ? PIP_NUDGE_SHIFT : PIP_NUDGE;
   const halfX = size.width / 2 / out.width, halfY = size.height / 2 / out.height;
   const within = (v: number, half: number) => Math.min(1 - half, Math.max(half, v));
@@ -482,8 +526,123 @@ pipBox.addEventListener("keydown", (e) => {
 });
 pipBox.addEventListener("keyup", (e) => {
   if (!e.key.startsWith("Arrow") || !pipDefault) return;
+  if (reframing) { void setFraming(pipDefault.framing, "commit"); return; }
   void editPip({ kind: "move", center: pipDefault.center }, "commit");
 });
+
+// ---- The default framing (STC-642) ----------------------------------------------
+//
+// The same model as the editor's Reframe (STC-461): a centre + zoom inside the
+// camera frame, never a rect, bounded by clampFraming. Here the PiP itself is
+// the window: the picture is drawn through framingSource, so panning moves the
+// picture under a fixed shape. A drag passes its delta AS SEEN; panFraming
+// flips x back for a mirrored picture. Reset stores no framing at all, which
+// is today's behaviour byte for byte (settings.ts drops a centred, unzoomed
+// one for the same reason).
+
+let framePan: { x: number; y: number } | null = null;
+let previewNote = "";
+const zoomIn = $("pipzoom") as HTMLInputElement;
+Object.assign(zoomIn, { min: "1", max: String(PIP_FRAMING_ZOOM_MAX), step: "0.05" });
+const reframeBtn = $("pipreframe") as HTMLButtonElement;
+const resetBtn = $("pipframereset") as HTMLButtonElement;
+const guidesSwitch = $("pipguidesswitch") as HTMLInputElement;
+const PIP_HINT_PLACE = $("pip-hint").textContent ?? "";
+const PIP_HINT_FRAME = "Drag the picture or use the arrow keys to frame yourself. Scroll to zoom. Press Done or Esc to finish.";
+const PIP_FRAME_HELP = $("pipreframe-help").textContent ?? "";
+
+function drawFramingControls(s: PipStyle): void {
+  const live = previewKind === "live";
+  const f = s.framing ?? DEFAULT_FRAMING;
+  zoomIn.value = String(f.zoom);
+  zoomIn.disabled = !live;
+  zoomIn.style.setProperty("--fill-pct", `${((f.zoom - 1) / (PIP_FRAMING_ZOOM_MAX - 1)) * 100}%`);
+  $("pipzoom-out").textContent = `${f.zoom.toFixed(1)}×`;
+  reframeBtn.disabled = !live;
+  // The button names what a press does: Reframe, then Done (never a pressed
+  // state as well, which would make a screen reader say both).
+  reframeBtn.textContent = reframing ? "Done" : "Reframe";
+  reframeBtn.classList.toggle("on", reframing);
+  // Greyed out, the row says why: the preview's own reason (STC-638's words).
+  $("pipreframe-help").textContent = live ? PIP_FRAME_HELP
+    : previewKind === "starting" || !previewNote ? "Waiting for the camera…" : `${previewNote}.`;
+  resetBtn.disabled = s.framing === undefined;
+  guidesSwitch.checked = framingGuides;
+  $("pipguides").hidden = !(reframing && framingGuides);
+  pipBox.classList.toggle("reframing", reframing);
+  $("pip-hint").textContent = reframing ? PIP_HINT_FRAME : PIP_HINT_PLACE;
+  const what = reframing ? "Camera framing" : "Camera position";
+  pipBox.setAttribute("aria-label", previewNote ? `${what}. ${previewNote}` : what);
+}
+
+/** live = repaint only; commit = persist, then show what was stored. Undefined = no framing. */
+async function setFraming(framing: PipStyle["framing"], phase: "live" | "commit"): Promise<void> {
+  if (!pipDefault) return;
+  if (framing === undefined) {
+    const { framing: _f, ...rest } = pipDefault;
+    pipDefault = rest;
+  } else {
+    pipDefault = editPipStyle(pipDefault, { kind: "framing", framing }, camSize());
+  }
+  drawPip();
+  if (phase !== "commit") return;
+  try {
+    pipDefault = (await bridge.setSettings({ pipStyle: pipDefault })).pipStyle;
+  } catch (e) {
+    alertUser(`Could not save the camera framing: ${String(e)}`);
+  }
+  drawPip();
+}
+
+/** Move the PICTURE by a screen delta: the crop moves the other way. */
+function panBy(dxCss: number, dyCss: number, phase: "live" | "commit"): void {
+  if (!pipDefault || !pipBox.clientWidth) return;
+  const cam = camSize();
+  const perCss = framingSource(pipDefault, cam).width / pipBox.clientWidth; // camera px per CSS px
+  void setFraming(panFraming(pipDefault, { x: -dxCss * perCss, y: -dyCss * perCss }, cam), phase);
+}
+
+function setZoom(zoom: number, phase: "live" | "commit"): void {
+  if (!pipDefault || !Number.isFinite(zoom)) return;
+  void setFraming(zoomFraming(pipDefault, zoom, camSize()), phase);
+}
+
+function setReframing(on: boolean): void {
+  if (reframing === on) return;
+  reframing = on;
+  framePan = null;
+  drawPip();
+}
+
+reframeBtn.addEventListener("click", () => {
+  setReframing(!reframing);
+  if (reframing) pipBox.focus();
+});
+resetBtn.addEventListener("click", () => void setFraming(undefined, "commit"));
+zoomIn.addEventListener("input", () => setZoom(Number(zoomIn.value), "live"));
+zoomIn.addEventListener("change", () => setZoom(Number(zoomIn.value), "commit"));
+// The wheel zooms only while reframing: otherwise it scrolls the pane, as it always did.
+let wheelCommit: ReturnType<typeof setTimeout> | undefined;
+pipBox.addEventListener("wheel", (e) => {
+  if (!reframing || !pipDefault) return;
+  e.preventDefault();
+  setZoom((pipDefault.framing?.zoom ?? 1) * Math.exp(-e.deltaY / 500), "live");
+  clearTimeout(wheelCommit);
+  wheelCommit = setTimeout(() => { if (pipDefault) void setFraming(pipDefault.framing, "commit"); }, 250);
+}, { passive: false });
+guidesSwitch.addEventListener("change", () => {
+  framingGuides = guidesSwitch.checked;
+  drawPip();
+  // The same sticky preference the editor's Guides button sets (STC-497).
+  void save("the thirds guides", () => bridge.setSettings({ framingGuides }));
+});
+// Escape ends Reframe and nothing else, as in the editor.
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !reframing) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  setReframing(false);
+}, { capture: true });
 
 // ---- Shortcuts pane (STC-292) -------------------------------------------------
 //
@@ -648,6 +807,7 @@ async function loadSettings(): Promise<void> {
   gifWidthSel.set(String(s.gif.maxWidth));
   showDiagnosticsBox.checked = s.showDiagnostics;
   pipDefault = s.pipStyle;
+  framingGuides = s.framingGuides;
   drawPip();
   // LAST: a second round trip each, so a failure here leaves the rest set.
   await refreshDestination();

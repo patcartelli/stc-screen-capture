@@ -54,6 +54,10 @@ const send = (ev, o = {}) => writeSync(3, JSON.stringify({ ev, ...o }) + "\n");
 const stat = (o) => process.stdout.write(JSON.stringify({ ev: "stats", ...o }) + "\n");
 /** STC-528: the fake's `level` readings, see STC_FAKE_LEVEL below. */
 let levelTimer;
+/** STC-642: the fake camera preview's frames, see STC_FAKE_CAMERA_PREVIEW below. */
+let previewTimer;
+/** 32x18 JPEG: left half #5a6e8c, right half #c8b478. */
+const FAKE_PREVIEW_JPEG = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAASACADASIAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAAAAcF/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/EABYBAQEBAAAAAAAAAAAAAAAAAAUGBP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AMMAqwrAAhD6PgLsAsACEPv/2Q==";
 
 setInterval(() => stat({
   state,
@@ -495,12 +499,28 @@ process.stdin.on("data", (chunk) => {
         break;
       // STC-638: the live camera view. There is no camera here, so a preview is refused the
       // way a machine with none refuses it, and a stop always answers (wasRunning false).
+      // STC_FAKE_CAMERA_PREVIEW=1 (STC-642) gives it a camera: a 32x18 two-tone JPEG
+      // (left half blue-grey, right half sand) on the LOSSY channel every 100 ms,
+      // as the real one sends frames, until a stop.
       case "camera-preview-start":
+        if (process.env.STC_FAKE_CAMERA_PREVIEW) {
+          send("camera-preview-started", { seq, device: "Fake Camera", uid: "fake-cam", openMs: 1 });
+          clearInterval(previewTimer);
+          let n = 0;
+          previewTimer = setInterval(() => process.stdout.write(JSON.stringify(
+            { ev: "camera-preview-frame", n: n++, w: 32, h: 18, jpeg: FAKE_PREVIEW_JPEG }) + "\n"), 100);
+          previewTimer.unref?.();
+          break;
+        }
         send("error", { seq, code: "camera-no-device" });
         break;
-      case "camera-preview-stop":
-        send("camera-preview-stopped", { seq, reason: "stopped", wasRunning: false });
+      case "camera-preview-stop": {
+        const wasRunning = previewTimer !== undefined;
+        clearInterval(previewTimer);
+        previewTimer = undefined;
+        send("camera-preview-stopped", { seq, reason: "stopped", wasRunning });
         break;
+      }
       // STC-572: main warms Vision whenever a helper comes up. Nothing to warm here.
       case "warm-text":
         send("text-warmed", { seq, ms: 0 });

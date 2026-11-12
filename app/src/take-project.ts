@@ -33,8 +33,9 @@
  *
  * Settings' PiP style is chosen before there is an editor, like Show Clicks. It
  * is seeded only when it differs from the default AND the take was started with
- * the camera on, and never with a framing: framing is per take, and absent
- * means centred.
+ * the camera on. Its framing goes with it (STC-642: the default framing set in
+ * Settings > Camera); absent means centred, as before. The take owns it after:
+ * the editor's Reframe overwrites the take's copy, never the setting.
  *
  * ## The window look (STC-626)
  *
@@ -63,8 +64,7 @@ function framingVersion(f: Framing): number {
 /** The style a new take starts with, or null when there is nothing to say. */
 export function defaultStyleForTake(stored: PipStyle, cameraOn: boolean): PipStyle | null {
   if (!cameraOn || isDefaultPipStyle(stored)) return null;
-  const { framing: _framing, ...style } = stored;
-  return style;
+  return stored;
 }
 
 /** The text to write to project.json, or null when every choice is the default. */
