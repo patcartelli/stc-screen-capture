@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   windowId, overrideFor, resolvedCrop, resolvedEasing, groupByEasing, nearestWindow,
   manualWindows, resolvedWindows, rectFromGesture, frameShaped, DEFAULT_OVERRIDE_RECT_FRACTION, MIN_DRAG_UV,
+  ZOOM_RECT_MAX_SIZE,
   type CombinedZoomWindow,
 } from "../src/zoom-override.js";
 import { createZoomSim, inWindow, ZOOM_PRESETS, type ZoomPreset, type ZoomWindow } from "../src/zoom.js";
@@ -216,9 +217,11 @@ describe("rectFromGesture", () => {
     expect(r.y + r.height).toBeLessThanOrEqual(1 + 1e-9);
   });
 
-  test("a drag that leaves the frame clamps to it", () => {
+  // STC-653: the whole frame is no zoom at all, which the Amount control does
+  // not allow either. zoom-rect-limits.test.ts holds the rest of the limits.
+  test("a drag that leaves the frame clamps to it, at the least zoom Amount allows", () => {
     const r = rectFromGesture({ x: -0.2, y: -0.2 }, { x: 1.3, y: 1.3 });
-    expect(r).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    expect(r).toEqual({ x: 0, y: 0, width: ZOOM_RECT_MAX_SIZE, height: ZOOM_RECT_MAX_SIZE });
   });
 });
 
@@ -281,27 +284,27 @@ describe("manualWindows", () => {
 
 describe("resolvedCrop / resolvedEasing with a manual window", () => {
   test("a manual window's own rect and easing win outright, with no overrides-table lookup", () => {
-    const [win] = manualWindows([manual("m1", 0, 1000, { x: 0.3, y: 0.4, width: 0.2, height: 0.2 }, "calm")]);
+    const [win] = manualWindows([manual("m1", 0, 1000, { x: 0.3, y: 0.4, width: 0.3, height: 0.3 }, "calm")]);
     // Overrides table has nothing matching windowId "0" — proves the crop
     // came from `.manual`, not from an accidental geometry-style lookup.
-    expect(resolvedCrop(undefined, win!)).toEqual({ x: 0.3, y: 0.4, width: 0.2, height: 0.2 });
+    expect(resolvedCrop(undefined, win!)).toEqual({ x: 0.3, y: 0.4, width: 0.3, height: 0.3 });
     expect(resolvedEasing(undefined, win!, "snappy")).toEqual({ in: "calm", out: "calm" });
   });
 
   test("an odd-shaped saved rect resolves frame-shaped (STC-629)", () => {
-    const [win] = manualWindows([manual("m1", 0, 1000, { x: 0.3, y: 0.4, width: 0.1, height: 0.2 }, "calm")]);
+    const [win] = manualWindows([manual("m1", 0, 1000, { x: 0.3, y: 0.4, width: 0.15, height: 0.3 }, "calm")]);
     const r = resolvedCrop(undefined, win!)!;
-    expect(r.width).toBeCloseTo(0.2, 10);
-    expect(r.height).toBeCloseTo(0.2, 10);
-    expect(r.x + r.width / 2).toBeCloseTo(0.35, 10);
+    expect(r.width).toBeCloseTo(0.3, 10);
+    expect(r.height).toBeCloseTo(0.3, 10);
+    expect(r.x + r.width / 2).toBeCloseTo(0.375, 10);
   });
 
   test("a derived window (no .manual) is unaffected — falls through to the existing geometry lookup", () => {
     const derived: CombinedZoomWindow = w(100, 200);
     const overrides: ZoomOverride[] = [
-      { kind: "geometry", windowId: "100", rect: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } },
+      { kind: "geometry", windowId: "100", rect: { x: 0.5, y: 0.5, width: 0.3, height: 0.3 } },
     ];
-    expect(resolvedCrop(overrides, derived)).toEqual({ x: 0.5, y: 0.5, width: 0.1, height: 0.1 });
+    expect(resolvedCrop(overrides, derived)).toEqual({ x: 0.5, y: 0.5, width: 0.3, height: 0.3 });
     expect(resolvedEasing(overrides, derived, "standard")).toEqual({ in: "standard", out: "standard" }); // no easing on the override
   });
 });

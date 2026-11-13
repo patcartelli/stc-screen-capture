@@ -20,6 +20,7 @@ import {
 import { FRAMING_PRESETS, DEFAULT_SOLID_COLOR, FRAMING_PADDING_MAX, FRAMING_RADIUS_MAX } from "./framing.js";
 import { CAMERA_STALL_NS } from "./camera-gaps.js";
 import { FOLLOW_DEAD_ZONE_FRACTION, FOLLOW_OMEGA } from "./zoom-follow.js";
+import { ZOOM_AMOUNT_MIN, ZOOM_AMOUNT_MAX } from "./zoom-override.js";
 
 /**
  * Which transform made the pixels (STC-308).
@@ -236,8 +237,25 @@ import { FOLLOW_DEAD_ZONE_FRACTION, FOLLOW_OMEGA } from "./zoom-follow.js";
  * every project: render() does not branch on `project.transform.version`. A document whose
  * output short side is 1080 and whose PiP sat at least the margin from every edge renders
  * exactly what version 19 did. The fingerprint moved: the margin constants reach the pixels.
+ *
+ * ## Version 21: a zoom region is held to the Amount limits (STC-653)
+ *
+ * A tuned zoom region could be any four finite numbers. A drag from the frame's edge outward
+ * saved 0 x 0, a 15 px drag saved a 32x block, and at full zoom a zero-size crop rendered one
+ * flat colour with no pointer. render() now holds every tuned rect so its longer side is between
+ * 1/ZOOM_AMOUNT_MAX and 1/ZOOM_AMOUNT_MIN of the frame and it lies inside the frame
+ * (zoom-override.ts's `withinZoomLimits`, applied in `resolvedCrop`); the loader holds a real
+ * region the same way and refuses one that is not a region of the frame at all. Applies to every
+ * project: render() does not branch on `project.transform.version`.
+ *
+ * The bump is for the documents older builds DID write outside the limits, because those render
+ * differently now: a block under a quarter of the frame zooms 4x about its own centre instead of
+ * further, and a whole-frame block (a drag across the full picture, which zoomed nowhere) zooms
+ * 1.1x. A document whose tuned rects all sit inside the limits and the frame renders exactly what
+ * version 20 did: `withinZoomLimits` hands such a rect back as the same object. The fingerprint
+ * moved: the two Amount limits reach the pixels now.
  */
-export const TRANSFORM_VERSION = 20;
+export const TRANSFORM_VERSION = 21;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -261,6 +279,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 18, since: "2026-10-30", changed: "a zoom block can follow the cursor (STC-617): project-19's follow:true on a geometry or manual override keeps the block's rect SIZE and moves its place with the pointer (zoom-follow.ts). The crop opens centred on the cursor at the block's start, a goal centre moves only once the pointer leaves the middle FOLLOW_DEAD_ZONE_FRACTION (0.5) of the crop, and the crop chases it on one critically damped FOLLOW_OMEGA (8 rad/s) spring, clamped inside the frame and frozen after the block's end. Stepped per 120 Hz tick from the block's first tick with checkpoints, so a seek and a continuous run agree. A document with no following block renders exactly what version 17 did. The fingerprint moved: the follow constants reach the pixels" },
   { version: 19, since: "2026-11-02", changed: "no zoom block stretches the picture (STC-629): the compositor stretches the crop over a frame-shaped output, so only a UV-square crop keeps the picture's proportions. Stage 2's crops already were (STC-387); a drawn or manual rect was any shape, and the click-default box was square in pixels. render() now widens every tuned rect to a UV square about its centre, slid inside the frame (zoom-override.ts's frameShaped), Follow included, and the editor draws only frame-shaped boxes. A document whose rects are all UV squares renders exactly what version 18 did. No constant reaches the pixels, so the fingerprint is unchanged" },
   { version: 20, since: "2026-11-02", changed: "the PiP keeps a margin that scales with the output (STC-591): its buffer from the content rect's edge is pipMarginPx (spaces.ts) — marginPx read as pixels at a 1080-pixel short side, scaled and rounded, so 1080p is unchanged and 4K gets 64. The fixed corner, the snap anchors and the pipRect clamp share it, so a free drag or a styled PiP saved flush now stops at the margin. Applies to every project. The fingerprint moved: the margin constants reach the pixels" },
+  { version: 21, since: "2026-11-13", changed: "a zoom region is held to the Amount limits (STC-653): render() holds every tuned rect so its longer side is between 1/4 and 1/1.1 of the frame and it lies inside the frame (zoom-override.ts's withinZoomLimits, in resolvedCrop), and a rect with no size becomes the smallest allowed square about its centre instead of a zero-size crop (one flat colour, no pointer). The loader holds a real region the same way and drops one that is not a region of the frame. A drag can no longer draw outside the limits. Documents older builds wrote outside them render differently: under a quarter of the frame is 4x about the same centre, a whole-frame block is 1.1x. A document whose rects are all inside the limits renders exactly what version 20 did. Applies to every project. The fingerprint moved: ZOOM_AMOUNT_MIN and ZOOM_AMOUNT_MAX reach the pixels" },
 ];
 
 /**
@@ -300,6 +319,8 @@ export function transformFingerprint(): string {
     cameraStall: CAMERA_STALL_NS,
     // STC-617: where a following zoom block's crop sits.
     zoomFollow: { FOLLOW_DEAD_ZONE_FRACTION, FOLLOW_OMEGA },
+    // STC-653: the size limits render() holds every tuned zoom region to.
+    zoomLimits: { ZOOM_AMOUNT_MIN, ZOOM_AMOUNT_MAX },
   };
   const text = JSON.stringify(inputs);
   let h = 0x811c9dc5;

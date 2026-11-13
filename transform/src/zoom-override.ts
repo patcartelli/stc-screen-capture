@@ -138,14 +138,29 @@ export function manualWindows(overrides: readonly ZoomOverride[] | undefined): C
  * back to, unlike a geometry override which may simply not exist for a
  * given derived window, or (project-20, STC-630) exist to carry only a
  * speed, with no rect: either way `undefined`, so stage 2 places it.
+ *
+ * Every rect out is inside the Amount limits and the frame (STC-653,
+ * `withinZoomLimits`): this is the last place a zero-size or 200x region
+ * could reach render()'s crop, and it cannot get past here.
  */
 export function resolvedCrop(
   overrides: readonly ZoomOverride[] | undefined,
   window: CombinedZoomWindow,
 ): Rect | undefined {
-  if (window.manual) return frameShaped(window.manual.rect);
+  if (window.manual) return heldCrop(window.manual.rect);
   const rect = overrideFor(overrides, window)?.rect;
-  return rect && frameShaped(rect);
+  return rect && heldCrop(rect);
+}
+
+/**
+ * A tuned rect as render() may use it: held to the Amount limits (STC-653),
+ * then frame-shaped (STC-629). In that order, so a rect with one side at zero
+ * is given a size before anything reads its shape. Both steps hand back a
+ * rect that needs neither as the same object, and widening never leaves the
+ * limits: the longer side is what both of them measure.
+ */
+function heldCrop(rect: Rect): Rect {
+  return frameShaped(withinZoomLimits(rect));
 }
 
 /**
@@ -276,6 +291,82 @@ export function nearestWindow<T extends ZoomWindow>(
 }
 
 // ---------------------------------------------------------------------------
+// How big a zoom region may be (STC-653)
+// ---------------------------------------------------------------------------
+
+/**
+ * How far a zoom region may zoom in: the frame over the region's longer side,
+ * from just past no zoom to 4x (STC-606's Amount control, whose range these
+ * are; `app/src/override-edit.ts` re-exports them for the slider).
+ *
+ * They live here because they are a rule about the REGION, not about one
+ * control. Before STC-653 only the slider knew them: a drag from the frame's
+ * edge outward saved a 0 x 0 rect, a 15 px drag saved a 32x one, and the
+ * loader took any four finite numbers. At full zoom a zero-size crop is one
+ * flat colour with no pointer, and at an amount of exactly 1 the pointer's
+ * scale is `1 / 0`. Now the drag (`rectFromGesture`), the loader (`trim.ts`'s
+ * `cleanOverrideRect`) and render() (`resolvedCrop`) all read this one pair.
+ */
+export const ZOOM_AMOUNT_MIN = 1.1;
+export const ZOOM_AMOUNT_MAX = 4;
+
+/** The same limits as a region's longer side, in capture UV: the most zoom is the smallest region. */
+export const ZOOM_RECT_MIN_SIZE = 1 / ZOOM_AMOUNT_MAX;
+export const ZOOM_RECT_MAX_SIZE = 1 / ZOOM_AMOUNT_MIN;
+
+/**
+ * Slack for arithmetic, not for taste: `rectAtAmount` writes a size of
+ * `(1 / amount) / longer * longer`, which can land one ulp either side of the
+ * limit, and `x + width` for a region flush against the far edge can be
+ * 1.0000000000000002. Neither is a region outside the limits.
+ */
+const LIMIT_EPSILON = 1e-9;
+
+/** Whether a rect is a real region of the frame: finite, positive on both sides, and inside 0..1. */
+export function isRegionOfFrame(r: Rect): boolean {
+  if (![r.x, r.y, r.width, r.height].every((n) => Number.isFinite(n))) return false;
+  if (!(r.width > 0) || !(r.height > 0)) return false;
+  return r.x >= -LIMIT_EPSILON && r.y >= -LIMIT_EPSILON
+    && r.x + r.width <= 1 + LIMIT_EPSILON && r.y + r.height <= 1 + LIMIT_EPSILON;
+}
+
+/**
+ * A zoom region held to the Amount limits and to the frame.
+ *
+ * A region already inside both comes back as THE SAME OBJECT, so nothing a
+ * valid document renders can move. Otherwise it is resized about its own
+ * centre, keeping its shape, until its longer side is the nearest limit, and
+ * slid back inside the frame: exactly what the Amount slider does when it is
+ * touched (`rectAtAmount`), so a held region and a hand-set one agree.
+ *
+ * A rect that is no region at all (a side that is zero, negative or not
+ * finite) has no shape to keep. It becomes the smallest allowed square about
+ * whatever centre it names: the nearest thing to "a tiny region here". The
+ * loader never lets one this far (it refuses, see `cleanOverrideRect`); this
+ * branch is for a live document that never met the loader, and is what keeps
+ * a zero-size crop from ever reaching render()'s divide.
+ */
+export function withinZoomLimits(r: Rect): Rect {
+  const finite = (n: number, fallback: number) => (Number.isFinite(n) ? n : fallback);
+  const sized = Number.isFinite(r.width) && Number.isFinite(r.height) && r.width > 0 && r.height > 0;
+  if (!sized) {
+    const size = ZOOM_RECT_MIN_SIZE;
+    const cx = finite(r.x + finite(r.width, 0) / 2, 0.5);
+    const cy = finite(r.y + finite(r.height, 0) / 2, 0.5);
+    return clampRectToFrame({ x: cx - size / 2, y: cy - size / 2, width: size, height: size });
+  }
+  const longer = Math.max(r.width, r.height);
+  const sizeOk = longer >= ZOOM_RECT_MIN_SIZE - LIMIT_EPSILON && longer <= ZOOM_RECT_MAX_SIZE + LIMIT_EPSILON;
+  if (sizeOk && isRegionOfFrame(r)) return r;
+  const k = sizeOk ? 1 : Math.min(ZOOM_RECT_MAX_SIZE, Math.max(ZOOM_RECT_MIN_SIZE, longer)) / longer;
+  const width = r.width * k;
+  const height = r.height * k;
+  const cx = finite(r.x + r.width / 2, 0.5);
+  const cy = finite(r.y + r.height / 2, 0.5);
+  return clampRectToFrame({ x: cx - width / 2, y: cy - height / 2, width, height });
+}
+
+// ---------------------------------------------------------------------------
 // Authoring a rect: click sets a default size, drag defines a custom one
 // ---------------------------------------------------------------------------
 
@@ -350,7 +441,10 @@ export function frameShaped(r: Rect): Rect {
  * whose extent (on its LONGER axis, so a mostly-horizontal or
  * mostly-vertical small drag is still judged the same way) clears
  * `MIN_DRAG_UV` grows a box from `a` toward `b`, sized by that longer axis,
- * and stops at the frame's edge. Anything smaller —
+ * and stops at the frame's edge. Its size is held to the Amount limits
+ * (`ZOOM_RECT_MIN_SIZE`..`ZOOM_RECT_MAX_SIZE`, STC-653), so a drag can never
+ * draw a region the Amount slider could not: `MIN_DRAG_UV` only decides
+ * click-or-drag and puts no floor on the result. Anything smaller —
  * including a bare click, `a` === `b` — is a DEFAULT_OVERRIDE_RECT_FRACTION
  * box centred on `a` and clamped to the frame. Mirrors `still-redact.ts`'s
  * `normaliseRegion` (drag → normalised region, UV out) with the one
@@ -371,10 +465,15 @@ export function rectFromGesture(
   // Room from the anchor to the edge the drag is heading for, per axis.
   const roomX = dx >= 0 ? 1 - ax : ax;
   const roomY = dy >= 0 ? 1 - ay : ay;
-  const size = Math.min(Math.max(Math.abs(dx), Math.abs(dy)), roomX, roomY);
-  return {
+  const drawn = Math.min(Math.max(Math.abs(dx), Math.abs(dy)), roomX, roomY);
+  // Held to the Amount limits (STC-653). `drawn` alone has no floor: a drag
+  // from the frame's edge outward has no room at all and was 0 x 0, and a
+  // 15 px drag was a 32x zoom. The box still hangs off the anchor, and slides
+  // back inside the frame only when the floor made it larger than the room.
+  const size = Math.min(ZOOM_RECT_MAX_SIZE, Math.max(ZOOM_RECT_MIN_SIZE, drawn));
+  return clampRectToFrame({
     x: dx >= 0 ? ax : ax - size,
     y: dy >= 0 ? ay : ay - size,
     width: size, height: size,
-  };
+  });
 }
