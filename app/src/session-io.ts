@@ -97,9 +97,12 @@ export async function loadTake(io: TakeIO): Promise<LoadedTake> {
     session.anchors.camera?.present === true,
   );
   // STC-626: here, so the editor and the hidden Copy window draw the same picture.
-  // Only for a framing that draws it. A read failure is the same as no file.
+  // Only for a framing that draws it. A MISSING file is null from the channel and
+  // draws the fallback colour. A read that THROWS is not caught (STC-673): a
+  // catch here turned main refusing the name into "no file", and no take drew
+  // its wallpaper. A refusal or a disk error fails the load, where it is seen.
   if (project.framing?.background?.kind === "wallpaper") {
-    session.wallpaper = await decodeWallpaper(await io.readOptional(WALLPAPER_FILE).catch(() => null));
+    session.wallpaper = await decodeWallpaper(await io.readOptional(WALLPAPER_FILE));
   }
   return { session, project, anchors, sources: { display: displaySrc, camera: cameraSrc } };
 }

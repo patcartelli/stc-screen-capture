@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WALLPAPER_FILE } from "../../transform/src/looks.js";
 import { OPTIONAL_TAKE_FILES, readOptionalTakeFile } from "../src/take-read.js";
 
 const takeDir = () => mkdtempSync(join(tmpdir(), "stc-take-read-"));
@@ -27,6 +28,13 @@ describe("readOptionalTakeFile (STC-525)", () => {
     writeFileSync(join(dir, "project.json"), '{"version":1}');
     const got = await readOptionalTakeFile(dir, "project.json");
     expect(new TextDecoder().decode(got!)).toBe('{"version":1}');
+  });
+
+  test("the wallpaper is an optional take file: its bytes when present, null when not (STC-673)", async () => {
+    const dir = takeDir();
+    expect(await readOptionalTakeFile(dir, WALLPAPER_FILE)).toBeNull();
+    writeFileSync(join(dir, WALLPAPER_FILE), new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
+    expect(new Uint8Array((await readOptionalTakeFile(dir, WALLPAPER_FILE))!)).toEqual(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
   });
 
   test("only ENOENT is swallowed: any other read error still throws", async () => {

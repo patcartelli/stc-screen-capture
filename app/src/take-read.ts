@@ -11,9 +11,17 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { WALLPAPER_FILE } from "@transform/looks.js";
 
-/** Files `loadTake` is allowed to find missing. `anchors.json` and the media are NOT here. */
-export const OPTIONAL_TAKE_FILES: ReadonlySet<string> = new Set(["project.json", "events.json"]);
+/**
+ * Files `loadTake` is allowed to find missing. `anchors.json` and the media are NOT here.
+ *
+ * The wallpaper is (STC-673): a take framed with it may have lost the picture and
+ * then draws its fallback colour. It was left off this list when STC-626 added the
+ * read, so the packaged app refused it and no take ever drew its wallpaper.
+ * `session-io-wallpaper.test.ts` holds every optional read in the app to this list.
+ */
+export const OPTIONAL_TAKE_FILES: ReadonlySet<string> = new Set(["project.json", "events.json", WALLPAPER_FILE]);
 
 /** The file's bytes as a plain ArrayBuffer, or null if it does not exist. Any other error still throws. */
 export async function readOptionalTakeFile(
