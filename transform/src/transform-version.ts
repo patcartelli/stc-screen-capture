@@ -236,8 +236,22 @@ import { FOLLOW_DEAD_ZONE_FRACTION, FOLLOW_OMEGA } from "./zoom-follow.js";
  * every project: render() does not branch on `project.transform.version`. A document whose
  * output short side is 1080 and whose PiP sat at least the margin from every edge renders
  * exactly what version 19 did. The fingerprint moved: the margin constants reach the pixels.
+ *
+ * ## Version 21: only a click on the recording is a click (STC-654, STC-674)
+ *
+ * The event tap records every click on the machine. A press that began outside what the take
+ * captured (another display, beside a recorded area or window) opened an auto-zoom whose crop
+ * slid to the nearest corner, and the press that stopped the take opened one the take ended
+ * inside. `loadSession` now turns both into plain moves (recorded-clicks.ts): a press whose
+ * `down` is off `geometryAt`'s `shown` display, and a press whose `down` is within
+ * `ZOOM_LEAD_NS` of `stop.t`. The pointer's path is unchanged; the press, its zoom window and
+ * its click highlight are gone. This is a change to what `session.events` holds, not to
+ * render(), so it applies to every take, old ones included: they open with fewer Auto zoom
+ * blocks, and an override keyed on a block that no longer exists stops applying (the
+ * standing behaviour for a window id that is gone). A take with no such press renders exactly
+ * what version 20 did. No constant moved, so the fingerprint is unchanged.
  */
-export const TRANSFORM_VERSION = 20;
+export const TRANSFORM_VERSION = 21;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -261,6 +275,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 18, since: "2026-10-30", changed: "a zoom block can follow the cursor (STC-617): project-19's follow:true on a geometry or manual override keeps the block's rect SIZE and moves its place with the pointer (zoom-follow.ts). The crop opens centred on the cursor at the block's start, a goal centre moves only once the pointer leaves the middle FOLLOW_DEAD_ZONE_FRACTION (0.5) of the crop, and the crop chases it on one critically damped FOLLOW_OMEGA (8 rad/s) spring, clamped inside the frame and frozen after the block's end. Stepped per 120 Hz tick from the block's first tick with checkpoints, so a seek and a continuous run agree. A document with no following block renders exactly what version 17 did. The fingerprint moved: the follow constants reach the pixels" },
   { version: 19, since: "2026-11-02", changed: "no zoom block stretches the picture (STC-629): the compositor stretches the crop over a frame-shaped output, so only a UV-square crop keeps the picture's proportions. Stage 2's crops already were (STC-387); a drawn or manual rect was any shape, and the click-default box was square in pixels. render() now widens every tuned rect to a UV square about its centre, slid inside the frame (zoom-override.ts's frameShaped), Follow included, and the editor draws only frame-shaped boxes. A document whose rects are all UV squares renders exactly what version 18 did. No constant reaches the pixels, so the fingerprint is unchanged" },
   { version: 20, since: "2026-11-02", changed: "the PiP keeps a margin that scales with the output (STC-591): its buffer from the content rect's edge is pipMarginPx (spaces.ts) — marginPx read as pixels at a 1080-pixel short side, scaled and rounded, so 1080p is unchanged and 4K gets 64. The fixed corner, the snap anchors and the pipRect clamp share it, so a free drag or a styled PiP saved flush now stops at the margin. Applies to every project. The fingerprint moved: the margin constants reach the pixels" },
+  { version: 21, since: "2026-11-13", changed: "only a click on the recording is a click (STC-654, STC-674): loadSession turns a press that began outside what the take captured (geometryAt's shown display: another display, or beside a recorded area or window), and a press that began within ZOOM_LEAD_NS of stop.t (the click that stopped the take), into plain moves (recorded-clicks.ts). Neither opens an auto-zoom window or draws a click highlight any more; the pointer's path is unchanged. Applies to every take, so an old one can open with fewer Auto zoom blocks. A take with no such press renders exactly what version 20 did. No constant reaches the pixels, so the fingerprint is unchanged" },
 ];
 
 /**
