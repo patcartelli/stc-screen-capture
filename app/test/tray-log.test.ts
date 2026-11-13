@@ -1,4 +1,6 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { callersOf, logTray, trayLogLine } from "../src/tray-log.js";
 
 /**
@@ -40,12 +42,20 @@ describe("trayLogLine", () => {
 });
 
 describe("logTray", () => {
-  test("writes one [tray] line to stderr naming its caller, not itself", () => {
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    function runQuitTeardown(): void { logTray("destroy"); }
+  test("writes one [tray] line naming its caller, not itself", () => {
+    const lines: string[] = [];
+    function runQuitTeardown(): void { logTray("destroy", "", (l) => lines.push(l)); }
     runQuitTeardown();
-    expect(err).toHaveBeenCalledTimes(1);
-    expect(String(err.mock.calls[0]![0])).toMatch(/^\[tray\] \d\d:\d\d:\d\d\.\d{3} destroy via runQuitTeardown\b/);
-    err.mockRestore();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\[tray\] \d\d:\d\d:\d\d\.\d{3} destroy via runQuitTeardown\b/);
+  });
+
+  test("goes to stderr SYNCHRONOUSLY by default, not through console.error (STC-624)", () => {
+    // Source-pinned: a console.error default passes every behavioural test
+    // here and still loses the line that matters, the one written in the tick
+    // the process dies in.
+    const src = readFileSync(join(__dirname, "../src/tray-log.ts"), "utf8");
+    expect(src).toMatch(/write: \(line: string\) => void = writeStderrSync/);
+    expect(src).toMatch(/writeSync\(2,/);
   });
 });
