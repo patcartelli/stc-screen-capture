@@ -2,10 +2,10 @@
 
 Not on `master` yet. Run from branch `accounts/stc-674-pill-clicks-helper` until it merges, then `master`.
 
-**Not run on a Mac yet. Nobody has clicked the real pill with this build.**
+**Run on the Mac 2026-11-13 (Patrick), window takes only: takes 1, 2 and 4 pass.** Pill clicks, a pill drag and the Stop click left no press in `events.json`; real window clicks did. Take 3 was recorded as a window take, so **a display take is still unrun**. Take 4 found STC-678: a click on Capture's menu-bar menu over the window is recorded.
 
 ```bash
-cd ~/dev/stc-screen-recorder && git fetch origin && git checkout accounts/stc-674-pill-clicks-helper && helper/build.sh && npm run app:start
+cd ~/dev/stc-screen-recorder && git fetch origin && git checkout --detach origin/accounts/stc-674-pill-clicks-helper && helper/build.sh && npm run app:start
 ```
 
 The helper must be rebuilt (`helper/build.sh` above): `app:start` does not rebuild it.
@@ -19,7 +19,7 @@ Record a **window** (Record, Space for Window mode, pick a window that sits unde
 Take 1, about 10 s:
 
 1. Click once in the window, away from the pill. Wait 3 s.
-2. Click on the pill beside Stop (on the timer, not the button). Wait 3 s.
+2. Click ON the pill, on its timer (not the Stop button, and not next to the pill: a click next to it is a real click). Wait 3 s.
 3. Press Stop.
 4. In the editor: there is ONE Auto zoom block, at the click from step 1.
 5. There is no block at the pill click from step 2, and none at the end of the take.
@@ -40,7 +40,7 @@ Take 3, a display take (Record, whole screen), about 10 s:
 Take 4, the menu-bar move:
 
 13. Start a window take. Menu bar icon > Move Pill > Bottom Center. Wait 1 s, click the pill's timer, wait 3 s, click in the window, Stop.
-14. In the editor: one block, at the window click only.
+14. In the editor: no block at the pill click. (Until STC-678 is fixed there is also a block at the menu item's click, if the menu hung over the window.)
 
 ## If a check fails
 
