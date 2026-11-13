@@ -312,6 +312,18 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
     /// file's own down(+1)/up(-1) events. Only events this take actually wrote
     /// may count toward it.
     private var heldButtons: Set<Int> = []
+
+    /// STC-674: where Capture's own windows (the pill) are right now, in the
+    /// tap's space, so a press on one is not recorded as a click. Written by
+    /// `refreshOwnWindowBounds` on `ownWindowQueue` and read by the tap, both
+    /// under `lock`. The window server is never asked on the tap's thread: one
+    /// lookup measured 0.5 ms typical and 18 ms worst (2026-11-13).
+    private var ownWindowRects: [CGRect] = []
+    private var ownWindowFilter = OwnWindowClickFilter()
+    private var ownWindowWatcher: DispatchSourceTimer?
+    private let ownWindowQueue = DispatchQueue(label: "stc.own-window-bounds", qos: .utility)
+    /// Presses and releases written as moves because they were on an own window.
+    private var eventsOwnWindow = 0
     private var framesNonMonotonic = 0
     private var lastPtsNs: Int64 = -1
     private var firstFramePtsNs: Int64 = -1
@@ -667,6 +679,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                     // still answered once, and App says `stopped-during-start`.
                     self.finishStart(.success(self.describe()))
                 } else {
+                    // Before the tap runs, so its first press already has bounds.
+                    self.startOwnWindowWatcher()
                     self.runEventTap(tap)
                     self.startKeyInjection()
                     self.startCursorSampler()
@@ -1040,6 +1054,41 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         diskWatcher = t
         lock.unlock()
         t.resume()
+    }
+
+    // MARK: STC-674 own-window bounds
+
+    /// Keeps `ownWindowRects` current for the take. The ids are the request's
+    /// `excludeWindowIds` for EVERY scope: a window take's stream filter
+    /// ignores them, and its event tap must not.
+    private func startOwnWindowWatcher() {
+        guard let ids = startRequest?.excludeWindowIds, !ids.isEmpty else { return }
+        // Once here, off the tap's thread, so the tap never starts with none.
+        ownWindowQueue.sync { self.refreshOwnWindowBounds(ids) }
+        let t = DispatchSource.makeTimerSource(queue: ownWindowQueue)
+        t.schedule(deadline: .now() + OWN_WINDOW_REFRESH_SECONDS, repeating: OWN_WINDOW_REFRESH_SECONDS)
+        t.setEventHandler { [weak self] in self?.refreshOwnWindowBounds(ids) }
+        // The window watcher's race, the same way (startWindowWatcher).
+        lock.lock()
+        if stoppingBegan {
+            lock.unlock()
+            discardUnresumedTimer(t)
+            return
+        }
+        ownWindowWatcher = t
+        lock.unlock()
+        t.resume()
+    }
+
+    /// One window-server read per id. Only ever on `ownWindowQueue`. Needs no
+    /// grant: bounds and alpha are not the protected part of the window list.
+    private func refreshOwnWindowBounds(_ ids: [UInt32]) {
+        var info: [[String: Any]] = []
+        for id in ids {
+            info += CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]] ?? []
+        }
+        let rects = ownWindowBounds(fromWindowInfo: info)
+        lock.lock(); ownWindowRects = rects; lock.unlock()
     }
 
     // MARK: STC-561 hold frames
@@ -2624,20 +2673,37 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 return
             }
             let loc = event.location
-            var e: [String: Any] = ["t": t, "kind": kind, "x": loc.x, "y": loc.y]
-            if let button { e["button"] = button }
             lock.lock()
-            events.append(e)
+            // STC-674: a press on Capture's own pill, and the release that
+            // closes it, are written as plain moves. The pointer's path stays
+            // whole; no click reaches the file, so no auto-zoom opens on it.
+            let ownWindow = ownWindowFilter.decide(kind: kind, button: button, at: loc,
+                                                   ownWindows: ownWindowRects) == .asMove
+            if ownWindow {
+                eventsOwnWindow += 1
+                events.append(["t": t, "kind": "move", "x": loc.x, "y": loc.y])
+            } else {
+                var e: [String: Any] = ["t": t, "kind": kind, "x": loc.x, "y": loc.y]
+                if let button { e["button"] = button }
+                events.append(e)
+            }
             // Track what is held so a pause can release it (see
             // recordHeldButtonReleases). Updated only for events this take
             // actually RECORDS, which is what keeps it in step with the prefix
             // sum cursor.ts computes over the same file. It sits after the
             // paused check by construction, so nothing dropped can reach it.
-            if let button {
+            // A press written as a move (STC-674) is not a recorded press.
+            if !ownWindow, let button {
                 if kind == "down" { heldButtons.insert(button) }
                 else if kind == "up" { heldButtons.remove(button) }
             }
+            let watching = ownWindowWatcher != nil
             lock.unlock()
+            // The release may have ended a drag of the pill: read where it is
+            // now, rather than wait for the timer. Off this thread.
+            if ownWindow, kind == "up", watching, let ids = startRequest?.excludeWindowIds {
+                ownWindowQueue.async { [weak self] in self?.refreshOwnWindowBounds(ids) }
+            }
         }
     }
 
@@ -2789,6 +2855,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
                 "framesHeld": framesHeld,
                 "framesPaused": framesPaused,
                 "eventsPaused": eventsPaused,
+                "eventsOwnWindow": eventsOwnWindow,
                 "paused": pauseGate.isPaused,
                 "nonMonotonic": framesNonMonotonic, "events": events.count,
                 "cursorEvents": cursorEvents,
@@ -2876,6 +2943,8 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         diskWatcher = nil
         let holdWatch = holdTimer
         holdTimer = nil
+        let ownWatch = ownWindowWatcher
+        ownWindowWatcher = nil
         lastWrittenBuffer = nil
         // STC-235: read under the lock a refit's restart swaps it under. Nil
         // with `restarting` set means a restart is between streams: the old
@@ -2898,6 +2967,7 @@ final class CaptureSession: NSObject, SCStreamOutput, SCStreamDelegate {
         // already fired) and closes the watcher for every other stop reason.
         winWatcher?.cancel()
         winTracker?.cancel()
+        ownWatch?.cancel()
         diskWatch?.cancel()
         holdWatch?.cancel()
 

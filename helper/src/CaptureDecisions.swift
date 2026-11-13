@@ -235,6 +235,84 @@ func decideCursorEvent(type: CGEventType, timestampNs: UInt64, t0Ns: UInt64) -> 
     return .event(t: Int(timestampNs - t0Ns), kind: kind, button: button)
 }
 
+// ── clicks on Capture's own windows (STC-674) ───────────────────────────────
+
+enum OwnWindowClick: Equatable {
+    /// Write the event as it came.
+    case record
+    /// Write it as a `move` with no button: the pointer was there, and no
+    /// press happened as far as the take is concerned.
+    case asMove
+}
+
+/**
+ Keeps presses on Capture's own windows out of events.json (STC-674).
+
+ The tap hears every click on the machine, the recording pill's included, and
+ `zoom.ts` opens an auto-zoom on every recorded click. The transform cannot
+ drop these itself: it does not know where the pill was. The helper does, since
+ the pill's CGWindowID arrives on `start` as `excludeWindowIds`.
+
+ A press inside one of `ownWindows` is written as a MOVE, and so is the release
+ that closes it, wherever that release lands (a drag moves the pill out from
+ under the pointer). The position sample is kept, so the cursor's path has no
+ hole. Only a release whose press was dropped is dropped: a recorded press
+ always gets its release, or `cursor.ts`'s prefix sum would leave the take
+ pressed to its end.
+
+ Per button, and every press starts clean. The second matters because the
+ release of a dropped press can be lost before it gets here (a pause drops
+ every event first); without it the next real click's release would be
+ swallowed in its place.
+
+ `ownWindows` are the windows' bounds NOW, in the tap's own space:
+ CoreGraphics global points, origin top-left. Looking them up is the caller's
+ job and is not done on the tap's thread (`CaptureSession.refreshOwnWindowBounds`).
+ */
+struct OwnWindowClickFilter {
+    /// Buttons whose press was dropped and whose release has not come yet.
+    private var dropped: Set<Int> = []
+
+    mutating func decide(kind: String, button: Int?, at point: CGPoint,
+                         ownWindows: [CGRect]) -> OwnWindowClick {
+        guard let button else { return .record }
+        switch kind {
+        case "down":
+            if ownWindows.contains(where: { $0.contains(point) }) {
+                dropped.insert(button)
+                return .asMove
+            }
+            dropped.remove(button)
+            return .record
+        case "up":
+            return dropped.remove(button) != nil ? .asMove : .record
+        default:
+            return .record
+        }
+    }
+}
+
+/// How often the own-window bounds are read again (STC-674). The pill moves
+/// only when it is dragged or sent to a spot from the menu, and a drag's
+/// release asks for a read of its own, so this only has to catch the rest.
+let OWN_WINDOW_REFRESH_SECONDS: Double = 0.2
+
+/// The window server's description of some windows (`CGWindowListCopyWindowInfo`)
+/// as the rects a click is tested against. A window that is gone has no entry;
+/// an entry with no usable bounds is skipped rather than guessed at.
+///
+/// A window at zero alpha is skipped too. The pill is made BEFORE `start`, at
+/// opacity 0 and click-through (STC-550), so a click on its spot then goes to
+/// the app underneath and is a real click.
+func ownWindowBounds(fromWindowInfo info: [[String: Any]]) -> [CGRect] {
+    info.compactMap { entry in
+        guard let d = entry["kCGWindowBounds"] as? NSDictionary,
+              let r = CGRect(dictionaryRepresentation: d), !r.isEmpty else { return nil }
+        if let alpha = entry["kCGWindowAlpha"] as? NSNumber, alpha.doubleValue <= 0 { return nil }
+        return r
+    }
+}
+
 
 // ── which camera to open (STC-286) ──────────────────────────────────────────
 
