@@ -59,7 +59,7 @@ describe("render() reads stage 2's derived crop", () => {
 
   test("a manual override still wins over stage 2's derived crop", () => {
     const WINDOW_ID = String(1700 * MS);
-    const OVERRIDE_TARGET = { x: 0.1, y: 0.1, width: 0.2, height: 0.2 };
+    const OVERRIDE_TARGET = { x: 0.1, y: 0.1, width: 0.3, height: 0.3 }; // inside the Amount limits (STC-653)
     const p: Project = {
       ...defaultProject(1920, 1080),
       overrides: [{ kind: "geometry", windowId: WINDOW_ID, rect: OVERRIDE_TARGET }],
