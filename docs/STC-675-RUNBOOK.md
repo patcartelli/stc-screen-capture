@@ -2,6 +2,8 @@
 
 Not on `master` yet. Run from branch `accounts/stc-675-panel-window-shot-look` until it merges, then `master`.
 
+**Run on the Mac 2026-11-16 (Patrick): all 9 checks pass.**
+
 ```bash
 cd ~/dev/stc-screen-recorder && git fetch origin && git checkout --detach origin/accounts/stc-675-panel-window-shot-look && npm run app:start
 ```
