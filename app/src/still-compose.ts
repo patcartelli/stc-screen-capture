@@ -1,8 +1,8 @@
 import type { Shot } from "@transform/shot";
-import { layoutStill, pxPerPointOf } from "@transform/still-decorate";
 import { renderStill, sampleRedactionFills } from "@transform/still-render";
 import { withMeshBackground } from "@transform/still-mesh";
-import { colorSpaceFor, planRender, type ExportOptions, type RenderPlan } from "@transform/still-export";
+import { colorSpaceFor, type ExportOptions, type RenderPlan } from "@transform/still-export";
+import { planStill } from "@transform/still-plan";
 
 /**
  * Composite a shot into a canvas at export scale and the display's own
@@ -55,21 +55,21 @@ export function composeStill(
   options: ExportOptions,
   background?: ImageBitmap,
 ): { canvas: HTMLCanvasElement; plan: RenderPlan } {
-  const layout = layoutStill(shot);
-  const pxPerPoint = pxPerPointOf(shot);
-  const plan = planRender(options, { layout, pxPerPoint });
+  // The document as DRAWN — the mode's presets filled in (STC-675). Every
+  // later read below is of `drawn`, never of the `shot` passed in.
+  const { shot: drawn, plan } = planStill(shot, options);
 
   const canvas = document.createElement("canvas");
   canvas.width = plan.layout.canvas.width;
   canvas.height = plan.layout.canvas.height;
   const ctx = canvas.getContext("2d", {
-    alpha: true, colorSpace: colorSpaceFor(shot.display.colorSpace) as never,
+    alpha: true, colorSpace: colorSpaceFor(drawn.display.colorSpace) as never,
   });
   if (!ctx) throw new Error("no 2d context for a still composite");
   // Sampled from the FRAME, not a previous composite: a region is normalised
   // against the frame, and reading an existing composite would read pixels an
   // earlier fill had already replaced.
-  const redactionFills = sampleRedactionFills(frame, shot.frame, shot.decoration.redactions);
+  const redactionFills = sampleRedactionFills(frame, drawn.frame, drawn.decoration.redactions);
   withMeshBackground(plan.layout.background, canvas.width, canvas.height, (mesh) =>
     renderStill(ctx as never, { frame, redactionFills, background: mesh ?? background }, plan.layout));
   return { canvas, plan };
