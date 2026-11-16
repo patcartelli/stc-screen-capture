@@ -88,6 +88,107 @@ check("a tap disabled by user input asks to be re-enabled, and says so",
 check("an event before the session start is discarded (schema requires t >= 0)",
       decideCursorEvent(type: .mouseMoved, timestampNs: t0 - 1, t0Ns: t0),
       CursorEventDecision.beforeStart)
+
+// ── clicks on Capture's own windows (STC-674) ───────────────────────────────
+// The tap hears every click on the machine, the recording pill's included, and
+// each recorded click opens an auto-zoom. A press on the pill is written as a
+// MOVE: the pointer's path stays whole and no press reaches events.json.
+let pill = CGRect(x: 800, y: 40, width: 220, height: 36)
+let onPill = CGPoint(x: 900, y: 58)
+let inWindow = CGPoint(x: 400, y: 400)
+do {
+    var f = OwnWindowClickFilter()
+    check("a press on the pill is written as a move",
+          f.decide(kind: "down", button: 0, at: onPill, ownWindows: [pill]), OwnWindowClick.asMove)
+    check("a move during that press is a move, as ever",
+          f.decide(kind: "move", button: nil, at: inWindow, ownWindows: [pill]), OwnWindowClick.record)
+    // A drag moves the pill out from under the pointer's ORIGINAL spot, and a
+    // release anywhere must still close the press that was dropped: an `up`
+    // with no `down` takes cursor.ts's prefix sum below zero.
+    check("the release that closes it is a move too, wherever it lands",
+          f.decide(kind: "up", button: 0, at: inWindow, ownWindows: [pill]), OwnWindowClick.asMove)
+    check("the next real click is recorded: down",
+          f.decide(kind: "down", button: 0, at: inWindow, ownWindows: [pill]), OwnWindowClick.record)
+    check("the next real click is recorded: up",
+          f.decide(kind: "up", button: 0, at: inWindow, ownWindows: [pill]), OwnWindowClick.record)
+}
+do {
+    var f = OwnWindowClickFilter()
+    check("a press beside the pill is a real click",
+          f.decide(kind: "down", button: 0, at: CGPoint(x: 799, y: 58), ownWindows: [pill]), OwnWindowClick.record)
+    // The press was recorded, so its release must be, even though the pointer
+    // has since moved onto the pill: dropping it would leave the take pressed.
+    check("its release is recorded even when it lands on the pill",
+          f.decide(kind: "up", button: 0, at: onPill, ownWindows: [pill]), OwnWindowClick.record)
+}
+do {
+    var f = OwnWindowClickFilter()
+    check("no own windows: every press is recorded",
+          f.decide(kind: "down", button: 0, at: onPill, ownWindows: []), OwnWindowClick.record)
+}
+do {
+    // Buttons are independent: a right press on the pill must not swallow the
+    // left release of a real drag that was already under way.
+    var f = OwnWindowClickFilter()
+    _ = f.decide(kind: "down", button: 0, at: inWindow, ownWindows: [pill])
+    check("a right press on the pill is dropped",
+          f.decide(kind: "down", button: 1, at: onPill, ownWindows: [pill]), OwnWindowClick.asMove)
+    check("the left release of the real press is still recorded",
+          f.decide(kind: "up", button: 0, at: onPill, ownWindows: [pill]), OwnWindowClick.record)
+    check("the right release is dropped with its press",
+          f.decide(kind: "up", button: 1, at: inWindow, ownWindows: [pill]), OwnWindowClick.asMove)
+}
+do {
+    // The release of a dropped press can be lost (a pause drops every event
+    // before this filter sees it). The next press of that button starts clean,
+    // or its release would be swallowed and the take would stay pressed.
+    var f = OwnWindowClickFilter()
+    _ = f.decide(kind: "down", button: 0, at: onPill, ownWindows: [pill])
+    check("after a lost release, a real press is recorded",
+          f.decide(kind: "down", button: 0, at: inWindow, ownWindows: [pill]), OwnWindowClick.record)
+    check("and so is its release",
+          f.decide(kind: "up", button: 0, at: inWindow, ownWindows: [pill]), OwnWindowClick.record)
+}
+do {
+    var f = OwnWindowClickFilter()
+    let moved = CGRect(x: 100, y: 900, width: 220, height: 36)
+    check("the pill's CURRENT bounds decide: a press where it used to be is real",
+          f.decide(kind: "down", button: 0, at: onPill, ownWindows: [moved]), OwnWindowClick.record)
+    _ = f.decide(kind: "up", button: 0, at: onPill, ownWindows: [moved])
+    check("and a press where it is now is dropped",
+          f.decide(kind: "down", button: 0, at: CGPoint(x: 150, y: 910), ownWindows: [moved]), OwnWindowClick.asMove)
+}
+// The window server's answer -> rects. A window that is gone has no entry and
+// contributes nothing; a malformed entry is skipped, never guessed at.
+check("bounds come from each window's own entry, in CoreGraphics points",
+      ownWindowBounds(fromWindowInfo: [[
+          "kCGWindowNumber": 7,
+          "kCGWindowBounds": ["X": 800, "Y": 40, "Width": 220, "Height": 36],
+      ]]), [pill])
+check("no entries: no bounds", ownWindowBounds(fromWindowInfo: []), [CGRect]())
+check("an entry with no bounds is skipped",
+      ownWindowBounds(fromWindowInfo: [["kCGWindowNumber": 7]]), [CGRect]())
+// The pill exists before `start` at opacity 0 and click-through (STC-550): a
+// click on its spot then lands on the app underneath, and is a real click.
+check("a window at zero alpha is skipped",
+      ownWindowBounds(fromWindowInfo: [[
+          "kCGWindowAlpha": 0,
+          "kCGWindowBounds": ["X": 800, "Y": 40, "Width": 220, "Height": 36],
+      ]]), [CGRect]())
+check("a visible window counts",
+      ownWindowBounds(fromWindowInfo: [[
+          "kCGWindowAlpha": 1,
+          "kCGWindowBounds": ["X": 800, "Y": 40, "Width": 220, "Height": 36],
+      ]]), [pill])
+// STC-674 was seen on a WINDOW take, whose stream filter ignores the ids. They
+// must still be on the request, which is where the event path reads them.
+if case .success(let r) = parseStartRequest(["dir": "/tmp/t", "windowId": 42, "excludeWindowIds": [7]]) {
+    check("a window take's request keeps excludeWindowIds", r.excludeWindowIds, [UInt32(7)])
+} else {
+    check("a window take's request with excludeWindowIds parses", false, true)
+}
+check("an empty window is skipped (it can hold no click)",
+      ownWindowBounds(fromWindowInfo: [["kCGWindowBounds": ["X": 0, "Y": 0, "Width": 0, "Height": 0]]]), [CGRect]())
 check("an unhandled event type is ignored",
       decideCursorEvent(type: .keyDown, timestampNs: t0, t0Ns: t0),
       CursorEventDecision.ignore)

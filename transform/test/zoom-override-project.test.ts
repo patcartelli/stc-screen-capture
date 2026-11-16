@@ -49,9 +49,10 @@ describe("parseProject", () => {
   });
 
   test("an override missing easing is fine — it is optional", () => {
-    const doc = baseDoc([{ kind: "geometry", windowId: "1000", rect: { x: 0, y: 0, width: 1, height: 1 } }]);
+    // A rect inside the Amount limits (STC-653); a whole-frame one is held to 1.1x on the way in.
+    const doc = baseDoc([{ kind: "geometry", windowId: "1000", rect: { x: 0, y: 0, width: 0.5, height: 0.5 } }]);
     const [o] = parseProject(doc, 640, 360, duration).overrides!;
-    expect(o).toEqual({ kind: "geometry", windowId: "1000", rect: { x: 0, y: 0, width: 1, height: 1 } });
+    expect(o).toEqual({ kind: "geometry", windowId: "1000", rect: { x: 0, y: 0, width: 0.5, height: 0.5 } });
     expect("easing" in o!).toBe(false);
   });
 
@@ -237,7 +238,7 @@ describe("projectForWrite emits the minimum version that can express it", () => 
     const p = base();
     p.overrides = [
       { kind: "geometry", windowId: "500", rect: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, easing: "calm" },
-      { kind: "geometry", windowId: "9000", rect: { x: 0, y: 0, width: 1, height: 1 } },
+      { kind: "geometry", windowId: "9000", rect: { x: 0.1, y: 0, width: 0.75, height: 0.75 } },
     ];
     const written = JSON.parse(JSON.stringify(projectForWrite(p, duration)));
     expect(parseProject(written, 640, 360, duration).overrides).toEqual(p.overrides);

@@ -3329,7 +3329,12 @@ async function paintWallpaperChip(): Promise<void> {
   if (wallpaperChipUrl) URL.revokeObjectURL(wallpaperChipUrl);
   wallpaperChipUrl = undefined;
   if (!chip) return;
-  const bytes = await editor.readTakeFileOptional(WALLPAPER_FILE).catch(() => null);
+  // The chip is decoration, so a failed read costs only the chip, but it is logged:
+  // a silent catch on this read is what hid STC-673.
+  const bytes = await editor.readTakeFileOptional(WALLPAPER_FILE).catch((err) => {
+    console.error("[wallpaper] could not read the take's wallpaper for the swatch:", err);
+    return null;
+  });
   if (!bytes) return;
   wallpaperChipUrl = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
   chip.style.backgroundImage = `url("${wallpaperChipUrl}")`;

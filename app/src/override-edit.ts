@@ -1,7 +1,7 @@
 import type { SessionEvent, ZoomOverride } from "@transform/types";
 import type { Rect } from "@transform/spaces";
 import { zoomWindows, type ZoomPreset } from "@transform/zoom";
-import { windowId } from "@transform/zoom-override";
+import { windowId, ZOOM_AMOUNT_MIN, ZOOM_AMOUNT_MAX } from "@transform/zoom-override";
 import {
   normalizeEasing, resolveEasing, speedsOf, type CompleteEasing, type EasingSpec, type SpeedPair,
 } from "@transform/zoom-easing";
@@ -51,10 +51,11 @@ export function chipSideFor(d: SpeedDraft): ChipSide {
  * the region about its centre, keeping its shape, and slides it back inside
  * the frame if the larger size would cross an edge. No new field: the amount
  * IS the region's size. The range is this ticket's call: from just past no
- * zoom to 4x.
+ * zoom to 4x. The two numbers live in `zoom-override.ts` (STC-653), where the
+ * drag, the loader and render() read the same pair; they are re-exported
+ * here for the slider.
  */
-export const ZOOM_AMOUNT_MIN = 1.1;
-export const ZOOM_AMOUNT_MAX = 4;
+export { ZOOM_AMOUNT_MIN, ZOOM_AMOUNT_MAX };
 
 export function amountOf(rect: Rect): number {
   const longer = Math.max(rect.width, rect.height);

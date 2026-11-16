@@ -4,6 +4,7 @@ import { DEFAULT_ZOOM_PRESET, ZOOM_PRESET_NAMES } from "./zoom.js";
 import {
   isCompleteEasing, isEasingSpec, isPairEasing, normalizeEasing, speedsOf, type CompleteEasing,
 } from "./zoom-easing.js";
+import { isRegionOfFrame, withinZoomLimits } from "./zoom-override.js";
 import { DEFAULT_TEXT_PT } from "./legibility.js";
 import { isProjectVersion } from "./project-version.js";
 import { TRANSFORM_VERSION } from "./transform-version.js";
@@ -340,12 +341,29 @@ function isDefaultZoom(z: Zoom): boolean {
  * the caller drops the whole entry, the same "one bad entry must not cost
  * every other tuned window" rule `cleanOverrides` follows for its other
  * fields.
+ *
+ * Two different things can be wrong with a rect, and they get different
+ * answers (STC-653):
+ *
+ * - It is NOT A REGION OF THE FRAME: a side that is zero, negative or not
+ *   finite, or a rect that leaves 0..1 (`isRegionOfFrame`). No build of the
+ *   editor meant that and there is no right repair for it, so it is refused
+ *   like any other malformed required field: `undefined`, entry dropped.
+ * - It is a real region, but smaller or larger than the Amount control
+ *   allows (1.1x to 4x). Builds before STC-653 saved these from an ordinary
+ *   drag: a 15 px one was a 32x block. That is somebody's block, with its
+ *   own timing, so it is KEPT and held to the nearest limit about its own
+ *   centre (`withinZoomLimits`), which is what touching the Amount slider
+ *   would have done to it. A region already inside the limits is read
+ *   exactly as written.
  */
 function cleanOverrideRect(r: unknown): Extract<ZoomOverride, { kind: "geometry" }>["rect"] | undefined {
   if (!r || typeof r !== "object") return undefined;
   const rd = r as Record<string, unknown>;
   if (![rd.x, rd.y, rd.width, rd.height].every((n) => typeof n === "number" && Number.isFinite(n))) return undefined;
-  return { x: rd.x as number, y: rd.y as number, width: rd.width as number, height: rd.height as number };
+  const rect = { x: rd.x as number, y: rd.y as number, width: rd.width as number, height: rd.height as number };
+  if (!isRegionOfFrame(rect)) return undefined;
+  return withinZoomLimits(rect);
 }
 
 /**
