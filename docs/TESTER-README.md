@@ -16,7 +16,7 @@ anything about the code.
 
 ## Install
 
-1. Download **Capture-1.0.1-arm64.dmg** from [LINK].
+1. Download **Capture-1.0.1-arm64.dmg** from https://github.com/patcartelli/stc-screen-capture/releases/tag/v1.0.1.
 2. Check the download (see [Check the download](#check-the-download)).
 3. Open the .dmg and drag **Capture** into **Applications**.
 4. Open Capture from Applications. It should open without a warning, because
@@ -84,7 +84,7 @@ Work through these in order. Each one takes a minute or two.
 
 1. Quit Capture.
 2. Delete the old Capture from Applications.
-3. Download the new .dmg from the same link as before ([LINK]).
+3. Download the new .dmg from the same link as before (https://github.com/patcartelli/stc-screen-capture/releases/tag/v1.0.1).
 4. Check it against the new checksum (see [Check the download](#check-the-download)).
 5. Install it as you did the first time.
 
