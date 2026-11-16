@@ -3,7 +3,6 @@ import {
   type LookId, type LookWrite,
 } from "@transform/backgrounds";
 import { parseShot, type Background, type Redaction, type Shot } from "@transform/shot";
-import { decorationForMode } from "@transform/still-decorate";
 import { DEFAULT_EXPORT_OPTIONS, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { decideRedactKey, normaliseRegion, undoLast } from "@transform/still-redact";
 import { iconSvg } from "./icons.js";
@@ -110,7 +109,9 @@ function updateUndoState(): void { undoBtn.disabled = regions.length === 0; }
 function decoratedShot(): Shot {
   return parseShot({
     ...shot,
-    decoration: decorationForMode(shot!.decoration.mode, { ...shot!.decoration, redactions: regions }),
+    // The STORED decoration with the live boxes. The mode's presets are
+    // filled where every other path fills them, `planStill` (STC-675).
+    decoration: { ...shot!.decoration, redactions: regions },
   });
 }
 

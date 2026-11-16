@@ -1,12 +1,12 @@
 import { parseShot, type Shot } from "@transform/shot";
 import { fmtDuration } from "./library-items.js";
-import { layoutStill, pxPerPointOf } from "@transform/still-decorate";
 import { withTimeout } from "@transform/timeout";
 import {
   classifyDrag, discardDirection, isDiscardSwipe, parseCorner, swipeOffset,
   SETTLE_READY_MS, PANEL_SIZE, type Size,
 } from "./thumbnail.js";
-import { planRender, stillIsBlocked, type ExportOptions } from "@transform/still-export";
+import { stillIsBlocked, type ExportOptions } from "@transform/still-export";
+import { planStill } from "@transform/still-plan";
 import {
   actionsFor, closesPanel, lockedWhileCopying, lockedWhileConverting, offersFormat, type PanelAction, type PanelTake,
 } from "./panel-actions.js";
@@ -341,13 +341,14 @@ async function runExport(action: ExportAction): Promise<boolean> {
   if (!shot || !composite) return false;
   const settings = (await window.thumb.getSettings()).still;
   let options: ExportOptions = { ...settings };
-  const layout = layoutStill(shot);
-  const pxPerPoint = pxPerPointOf(shot);
-  let plan = planRender(options, { layout, pxPerPoint });
+  // Through `planStill`, the same plan `composeStill` drew `composite` from
+  // (STC-675): laying out the stored shot here instead is what exported a
+  // fresh window shot with no margin and no shadow.
+  let { plan } = planStill(shot, options);
   let fellBackToPng = false;
   if (stillIsBlocked(plan)) {
     options = { ...options, format: "png" };
-    plan = planRender(options, { layout, pxPerPoint });
+    ({ plan } = planStill(shot, options));
     fellBackToPng = true;
   }
 
@@ -820,9 +821,8 @@ async function refreshDragFile(): Promise<void> {
   if (!shot || !composite) return;
   const mine = ++dragGeneration;
   dragFile = undefined;
-  const layout = layoutStill(shot);
-  const plan = planRender({ ...(await window.thumb.getSettings()).still },
-                          { layout, pxPerPoint: pxPerPointOf(shot) });
+  // `planStill`, as `composite` was drawn (STC-675), so `alpha` describes it.
+  const { plan } = planStill(shot, { ...(await window.thumb.getSettings()).still });
   const r = await window.thumb.dragFile({
     bytes: stillPixelBytes(composite),
     width: composite.width, height: composite.height, alpha: plan.alpha,

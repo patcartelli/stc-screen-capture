@@ -129,10 +129,7 @@ import {
 } from "./library-items.js";
 import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS } from "./stop-copy.js";
 import { latestOnly } from "./latest-only.js";
-import { decorationForMode, layoutStill } from "@transform/still-decorate";
-import { renderStill, sampleRedactionFills } from "@transform/still-render";
-import { withMeshBackground } from "@transform/still-mesh";
-import { colorSpaceFor, stillIsBlocked, type ExportOptions } from "@transform/still-export";
+import { DEFAULT_EXPORT_OPTIONS, stillIsBlocked, type ExportOptions } from "@transform/still-export";
 import { composeStill, loadShotBackground, stillPixelBytes } from "./still-compose.js";
 import type { Shot } from "@transform/shot";
 import type { GifSettings } from "@transform/gif-options";
@@ -467,7 +464,7 @@ const THUMB_MAX_EDGE = 480;
 /**
  * Draw one still's decorated result into `img`, and cache it beside the shot.
  *
- * Through the SAME `layoutStill` + `renderStill` the panel and the export use.
+ * Through the SAME `composeStill` the panel and the export use.
  * A second rendering path is what STC-293's Note forbids and would be the
  * quiet way for the grid to show something the export does not produce — the
  * ticket's own wording is that thumbnails render *"the decorated result, not
@@ -487,26 +484,11 @@ async function renderThumbnail(item: LibraryItem, img: HTMLImageElement): Promis
   let background: ImageBitmap | undefined;
   try {
     background = await loadShotBackground(shot, (name) => recorder.getFrame(dir, name));
-    // The stored decoration, filled in from the mode's presets exactly as the
-    // panel does — so a shot never opened since capture still shows what it
-    // would export.
-    const decorated = { ...shot, decoration: decorationForMode(shot.decoration.mode, shot.decoration) };
-    const layout = layoutStill(decorated);
-    const fit = Math.min(1, THUMB_MAX_EDGE / Math.max(layout.canvas.width, layout.canvas.height));
-
-    const full = document.createElement("canvas");
-    full.width = layout.canvas.width;
-    full.height = layout.canvas.height;
-    const ctx = full.getContext("2d", {
-      alpha: true, colorSpace: colorSpaceFor(shot.display.colorSpace) as never,
-    });
-    if (!ctx) throw new Error("no 2d context for a thumbnail");
-    // Sampled from the FRAME, not the composite: the regions are normalised
-    // against the frame, and reading the composite would read pixels a
-    // previous fill had already replaced.
-    const fills = sampleRedactionFills(frame, shot.frame, decorated.decoration.redactions);
-    withMeshBackground(layout.background, full.width, full.height, (mesh) =>
-      renderStill(ctx as never, { frame, redactionFills: fills, background: mesh ?? background }, layout));
+    // `composeStill` at native scale, the panel's and the editor's own path:
+    // it fills the mode's presets (`planStill`, STC-675), so a shot never
+    // opened since capture shows what it exports.
+    const { canvas: full } = composeStill(shot, frame, { ...DEFAULT_EXPORT_OPTIONS, scale: "native" }, background);
+    const fit = Math.min(1, THUMB_MAX_EDGE / Math.max(full.width, full.height));
 
     const small = document.createElement("canvas");
     small.width = Math.max(1, Math.round(full.width * fit));
@@ -714,13 +696,12 @@ async function copyStillImage(item: LibraryItem): Promise<void> {
   const frame = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   const background = await loadShotBackground(shot, (name) => recorder.getFrame(dir, name));
   try {
-    const decorated = { ...shot, decoration: decorationForMode(shot.decoration.mode, shot.decoration) };
     let options: ExportOptions = { ...(await recorder.getSettings()).still } as ExportOptions;
-    let composed = composeStill(decorated, frame, options, background);
+    let composed = composeStill(shot, frame, options, background);
     // A stored JPEG under a style with transparency: PNG, as the panel does.
     if (stillIsBlocked(composed.plan)) {
       options = { ...options, format: "png" };
-      composed = composeStill(decorated, frame, options, background);
+      composed = composeStill(shot, frame, options, background);
     }
     const { canvas, plan } = composed;
     const r = await recorder.exportStill({
@@ -730,7 +711,7 @@ async function copyStillImage(item: LibraryItem): Promise<void> {
       options,
       info: { ...(shot.window?.app ? { app: shot.window.app } : {}),
               ...(shot.window?.title ? { title: shot.window.title } : {}),
-              mode: decorated.decoration.mode },
+              mode: shot.decoration.mode },
       dir,
     });
     if (!r?.ok) throw new Error(`Could not copy the image: ${r?.detail ?? r?.code ?? "unknown error"}`);
