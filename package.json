@@ -1,7 +1,7 @@
 {
   "name": "stc-screen-recorder",
   "productName": "Capture",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
