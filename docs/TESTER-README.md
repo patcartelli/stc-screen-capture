@@ -16,7 +16,7 @@ anything about the code.
 
 ## Install
 
-1. Download **Capture-[VERSION]-arm64.dmg** from [LINK].
+1. Download **Capture-1.0.1-arm64.dmg** from [LINK].
 2. Check the download (see [Check the download](#check-the-download)).
 3. Open the .dmg and drag **Capture** into **Applications**.
 4. Open Capture from Applications. It should open without a warning, because
@@ -32,13 +32,13 @@ and numbers that proves the file is exactly the one we built. In Terminal,
 from the folder you downloaded to:
 
 ```bash
-shasum -a 256 Capture-[VERSION]-arm64.dmg
+shasum -a 256 Capture-1.0.1-arm64.dmg
 ```
 
 The output must match this value exactly:
 
 ```
-[SHA256]
+be05c9b82deeb1fd54e276996d2b5ccb4eb60c4320303b7fccdbb1b36ac4baf1
 ```
 
 If it doesn't match, delete the file and download it again. If it still
