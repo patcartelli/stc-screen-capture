@@ -4,14 +4,11 @@ Thanks for testing Capture. This page is everything you need to install it,
 let it record your screen, and send us a useful report. You don't need to know
 anything about the code.
 
-> **DRAFT.** Items in [square brackets] are not filled in yet. Remove this line
-> when they are.
-
 ## What you need
 
 - A Mac with **Apple Silicon** (M1 or later). Intel Macs are not supported.
 - **macOS 26** or later.
-- About [SIZE] MB free for the app, plus room for recordings. Recordings get
+- About 280 MB free for the app, plus room for recordings. Recordings get
   large quickly: a few minutes of screen can be several hundred MB.
 
 ## Install
@@ -78,7 +75,13 @@ Work through these in order. Each one takes a minute or two.
 
 ## Known issues in this build
 
-- [LIST KNOWN ISSUES FOR THIS BUILD, ONE LINE EACH.]
+- **Permission prompt stays after you grant it.** Clear the old entries and grant again:
+  ```bash
+  tccutil reset ScreenCapture com.studiocartelli.capture
+  tccutil reset ListenEvent com.studiocartelli.capture
+  ```
+  Then open Capture, grant both permissions, and relaunch.
+- **Crash when choosing "Relaunch Capture".** Seen once during testing and not reproduced since. If it happens, note the time and send us the log output from the report section below.
 
 ## How to update
 
