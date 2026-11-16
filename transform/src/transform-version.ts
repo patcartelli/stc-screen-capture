@@ -254,8 +254,23 @@ import { ZOOM_AMOUNT_MIN, ZOOM_AMOUNT_MAX } from "./zoom-override.js";
  * 1.1x. A document whose tuned rects all sit inside the limits and the frame renders exactly what
  * version 20 did: `withinZoomLimits` hands such a rect back as the same object. The fingerprint
  * moved: the two Amount limits reach the pixels now.
+ *
+ * ## Version 22: only a click on the recording is a click (STC-654, STC-674)
+ *
+ * The event tap records every click on the machine. A press that began outside what the take
+ * captured (another display, beside a recorded area or window) opened an auto-zoom whose crop
+ * slid to the nearest corner, and the press that stopped the take opened one the take ended
+ * inside. `loadSession` now turns both into plain moves (recorded-clicks.ts): a press whose
+ * `down` is off `geometryAt`'s `shown` display, and a press whose `down` is within
+ * `ZOOM_LEAD_NS` of `stop.t`. The pointer's path is unchanged; the press, its zoom window and
+ * its click highlight are gone. This is a change to what `session.events` holds, not to
+ * render(), so it applies to every take, old ones included: they open with fewer Auto zoom
+ * blocks, and an override keyed on a block that no longer exists stops applying (the
+ * standing behaviour for a window id that is gone). A take with no such press renders exactly
+ * what version 21 did. No constant moved, so the fingerprint is unchanged. (Built as 21;
+ * STC-653 took 21 first.)
  */
-export const TRANSFORM_VERSION = 21;
+export const TRANSFORM_VERSION = 22;
 
 /** What each version rendered. The last entry is TRANSFORM_VERSION. */
 export const TRANSFORM_HISTORY: readonly { version: number; since: string; changed: string }[] = [
@@ -280,6 +295,7 @@ export const TRANSFORM_HISTORY: readonly { version: number; since: string; chang
   { version: 19, since: "2026-11-02", changed: "no zoom block stretches the picture (STC-629): the compositor stretches the crop over a frame-shaped output, so only a UV-square crop keeps the picture's proportions. Stage 2's crops already were (STC-387); a drawn or manual rect was any shape, and the click-default box was square in pixels. render() now widens every tuned rect to a UV square about its centre, slid inside the frame (zoom-override.ts's frameShaped), Follow included, and the editor draws only frame-shaped boxes. A document whose rects are all UV squares renders exactly what version 18 did. No constant reaches the pixels, so the fingerprint is unchanged" },
   { version: 20, since: "2026-11-02", changed: "the PiP keeps a margin that scales with the output (STC-591): its buffer from the content rect's edge is pipMarginPx (spaces.ts) — marginPx read as pixels at a 1080-pixel short side, scaled and rounded, so 1080p is unchanged and 4K gets 64. The fixed corner, the snap anchors and the pipRect clamp share it, so a free drag or a styled PiP saved flush now stops at the margin. Applies to every project. The fingerprint moved: the margin constants reach the pixels" },
   { version: 21, since: "2026-11-13", changed: "a zoom region is held to the Amount limits (STC-653): render() holds every tuned rect so its longer side is between 1/4 and 1/1.1 of the frame and it lies inside the frame (zoom-override.ts's withinZoomLimits, in resolvedCrop), and a rect with no size becomes the smallest allowed square about its centre instead of a zero-size crop (one flat colour, no pointer). The loader holds a real region the same way and drops one that is not a region of the frame. A drag can no longer draw outside the limits. Documents older builds wrote outside them render differently: under a quarter of the frame is 4x about the same centre, a whole-frame block is 1.1x. A document whose rects are all inside the limits renders exactly what version 20 did. Applies to every project. The fingerprint moved: ZOOM_AMOUNT_MIN and ZOOM_AMOUNT_MAX reach the pixels" },
+  { version: 22, since: "2026-11-13", changed: "only a click on the recording is a click (STC-654, STC-674): loadSession turns a press that began outside what the take captured (geometryAt's shown display: another display, or beside a recorded area or window), and a press that began within ZOOM_LEAD_NS of stop.t (the click that stopped the take), into plain moves (recorded-clicks.ts). Neither opens an auto-zoom window or draws a click highlight any more; the pointer's path is unchanged. Applies to every take, so an old one can open with fewer Auto zoom blocks. A take with no such press renders exactly what version 21 did. No constant reaches the pixels, so the fingerprint is unchanged" },
 ];
 
 /**

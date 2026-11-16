@@ -6,6 +6,7 @@ import type { Changes } from "./changes.js";
 import type { ByteSource } from "./chunk-reader.js";
 import { checkGeometry } from "./display-geometry.js";
 import { checkWindowTrack, stabiliseEvents } from "./window-track.js";
+import { clicksOnTheRecording } from "./recorded-clicks.js";
 import { checkCaptureColour } from "./capture-colour.js";
 import { SessionLoadError } from "./session-error.js";
 
@@ -461,13 +462,18 @@ export async function loadSession(input: SessionInput): Promise<LoadedSession> {
     }
   }
 
+  // checkGeometry above ran on the helper's ORIGINAL document; this is the
+  // same timeline read on the file's clock — see snapGeometryToFrames.
+  // A dropped camera also drops its `endedBy` (STC-237) and `stalledSpans` (STC-553):
+  // there is no track left for them to describe, and both are refused on present:false.
+  const loadedAnchors = snapGeometryToFrames(cameraDropped ? { ...anchors, camera: withoutEndedBy({ ...anchors.camera!, present: false }) } : anchorsOut, video.framesNs);
+
   return {
-    // checkGeometry above ran on the helper's ORIGINAL document; this is the
-    // same timeline read on the file's clock — see snapGeometryToFrames.
-    // A dropped camera also drops its `endedBy` (STC-237) and `stalledSpans` (STC-553):
-    // there is no track left for them to describe, and both are refused on present:false.
-    anchors: snapGeometryToFrames(cameraDropped ? { ...anchors, camera: withoutEndedBy({ ...anchors.camera!, present: false }) } : anchorsOut, video.framesNs),
-    events: [...stabiliseEvents(anchors, pointerEvents)].sort((a, b) => a.t - b.t),
+    anchors: loadedAnchors,
+    // STC-654/STC-674: a press off the recording, or the one that stopped the take, is not
+    // a click on it (recorded-clicks.ts). Judged AFTER a moved window's displacement is
+    // taken out, against the anchors and frames render() maps the cursor with.
+    events: [...clicksOnTheRecording(loadedAnchors, stabiliseEvents(anchors, pointerEvents), video.framesNs)].sort((a, b) => a.t - b.t),
     ...(keyEvents.length > 0 ? { keys: keyEvents.sort((a, b) => a.t - b.t) } : {}),
     frames: video.framesNs,
     cameraFrames: cameraVideo?.framesNs,

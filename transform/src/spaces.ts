@@ -339,6 +339,16 @@ export function globalToCaptureUv(p: Point, display: DisplayGeometry, contentRec
   };
 }
 
+/**
+ * Is a global point on `display`? Give it `scopedDisplay`'s result (or
+ * `geometryAt`'s `shown`) and the question is "did this land on what the take
+ * captured" (STC-654). Edges count as on.
+ */
+export function onDisplay(p: Point, display: DisplayGeometry): boolean {
+  const { x, y } = toDisplayLocal(p, { x: display.originX, y: display.originY });
+  return x >= 0 && y >= 0 && x <= display.pointWidth && y <= display.pointHeight;
+}
+
 /** A global rectangle in display-local points. Units are unchanged, so the size is. */
 export function rectToDisplayLocal(r: Rect, displayOrigin: Point): Rect {
   const { x, y } = toDisplayLocal(r, displayOrigin);
