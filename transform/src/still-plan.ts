@@ -1,5 +1,5 @@
 import type { Shot } from "./shot.js";
-import { layoutStill, pxPerPointOf, type StillLayout } from "./still-decorate.js";
+import { decorationForMode, layoutStill, pxPerPointOf, type StillLayout } from "./still-decorate.js";
 import { planRender, type ExportOptions, type RenderPlan } from "./still-export.js";
 
 /**
@@ -26,8 +26,17 @@ export interface StillPlan {
   plan: RenderPlan;
 }
 
+/**
+ * The shot passed in is a stored document (the panel, the Library) or a live
+ * one (the editor, with its boxes), and either may lack what its mode means:
+ * a fresh capture is written with only the look's mode and background
+ * (`captureLook` → `applyLook`), so `paddingPct` and `shadow` are absent.
+ * `decorationForMode` fills them here and nowhere else; explicit values in the
+ * document still win. Nothing is written back: `shot.json` stays as stored, so
+ * no version changes and every existing shot opens as it did.
+ */
 export function planStill(shot: Shot, options: ExportOptions): StillPlan {
-  const drawn = shot;
+  const drawn: Shot = { ...shot, decoration: decorationForMode(shot.decoration.mode, shot.decoration) };
   const layout = layoutStill(drawn);
   const pxPerPoint = pxPerPointOf(drawn);
   return { shot: drawn, layout, pxPerPoint, plan: planRender(options, { layout, pxPerPoint }) };
