@@ -17,7 +17,10 @@ export function resolveHelperPath(opts: {
   hereDir: string;
   override?: string;
 }): string {
-  if (opts.override) return opts.override;
+  // STC-657: a packaged build never takes a helper from the environment. The
+  // helper runs under Capture's grants, so `override` is for a checkout only.
+  // (seams.ts already empties STC_HELPER_BIN there; this is the second lock.)
+  if (opts.override && !opts.isPackaged) return opts.override;
   return opts.isPackaged
     ? join(opts.resourcesPath, "stc-helper")
     : join(opts.hereDir, "..", "..", "helper", "build", "stc-helper");

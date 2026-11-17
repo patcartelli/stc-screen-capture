@@ -18,12 +18,19 @@ describe("resolveHelperPath", () => {
     expect(result).toBe(join("/Applications/Capture.app/Contents/Resources", "stc-helper"));
   });
 
-  test("override wins regardless of isPackaged", () => {
-    const withOverride = (isPackaged: boolean) =>
-      resolveHelperPath({
-        isPackaged, resourcesPath: "/r", hereDir: "/h", override: "/custom/stc-helper",
-      });
-    expect(withOverride(true)).toBe("/custom/stc-helper");
-    expect(withOverride(false)).toBe("/custom/stc-helper");
+  test("unpackaged: the override wins (a checkout's stand-in or debug build)", () => {
+    const result = resolveHelperPath({
+      isPackaged: false, resourcesPath: "/r", hereDir: "/h", override: "/custom/stc-helper",
+    });
+    expect(result).toBe("/custom/stc-helper");
+  });
+
+  // STC-657: the helper runs under Capture's grants, so a packaged build must
+  // not take its binary from the environment.
+  test("packaged: the override is ignored", () => {
+    const result = resolveHelperPath({
+      isPackaged: true, resourcesPath: "/r", hereDir: "/h", override: "/custom/stc-helper",
+    });
+    expect(result).toBe(join("/r", "stc-helper"));
   });
 });

@@ -7,6 +7,15 @@
 # `--mac dir` (fast, local); `npm run release:dmg` passes `--mac dmg`.
 appId: com.studiocartelli.capture
 productName: Capture
+# STC-657: fuses off for what a packaged Capture never uses. Each one lets a
+# process that launches the app run its own code under Capture's grants:
+# ELECTRON_RUN_AS_NODE turns the app binary into a Node, NODE_OPTIONS preloads
+# a script, --inspect opens a debugger on the main process. electron-builder
+# flips them after packaging and before signing, so the signature covers them.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
 directories:
   output: release
 files:
