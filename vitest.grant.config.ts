@@ -40,6 +40,7 @@ export default defineConfig({
     // grant and was not one.
     fileParallelism: false,
     testTimeout: 120_000,
-    globalSetup: ["./vitest.global-setup.ts"],
+    // STC-679: the shared setup plus a rebuild of a stale STCTestHost.
+    globalSetup: ["./vitest.grant-setup.ts"],
   },
 });
