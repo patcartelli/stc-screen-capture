@@ -1,3 +1,4 @@
+import "./seams-boot.js"; // STC-657: FIRST, so nothing below ever sees an STC_* seam in a packaged build
 import {
   app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, screen, Menu, nativeImage, clipboard,
   powerMonitor, nativeTheme, type IpcMainInvokeEvent,
