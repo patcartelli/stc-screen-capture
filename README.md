@@ -18,18 +18,25 @@ changed.
 ## Features
 
 ### For creators
-- **Dead-simple UI**: press Record, say what you want to say, press Stop
+- **Dead-simple flow**: press ⇧⌘5 (or pick Record in the menu bar), choose what to capture, say what
+  you want to say, press Stop
 - **Precise cursor**: real macOS pointer art (arrow, I-beam, hand, crosshair) with smooth motion and click highlights
 - **Picture-in-picture camera**: seamlessly composite your face on the video at any corner
 - **Audio**: record your microphone and system audio, set a level for each, mute either, and clean up your narration
 - **Smart trimming**: frame-accurate scrubber with rubber-band clamping, no off-by-one surprises
-- **Auto-zoom**: intelligently zoom to regions where you clicked, or manually set zoom windows
-- **Export dialogs**: choose output resolution and format (MP4 H.264)
-- **Screenshot stills**: capture any frame as a decorated still with optional redaction, annotation, and effects
-- **Global hotkeys**: ⌃⌥⇧⌘1/2/3 for full screen, window, or area capture (customizable)
-- **Menu bar quick access**: capture stills without the main window, right from the menu bar
-- **Library**: browse, organize, and manage all recordings and stills in one place
-- **Take library**: persistent collection of recordings and stills with search and duplicate control
+- **Auto-zoom**: zooms on clicks and drags, and the change track decides *where* (the region that
+  changed, else the cursor's neighbourhood); or set zoom windows by hand, optionally following the cursor
+- **Show keystrokes**: commands (named keys, ⌘/⌃ + a character) are drawn into the export; typed text
+  never reaches disk
+- **Export dialogs**: choose output resolution and format (MP4 H.264, or GIF)
+- **Shots**: capture an area, a window or the full display as a decorated still (backgrounds, a desktop
+  wallpaper look, redaction, annotation), copy it or save it as PNG/HEIC/JPEG
+- **Global hotkeys** that follow macOS's own screenshot keys: ⇧⌘4 area, ⇧⌘2 window, ⇧⌘3 full display,
+  ⇧⌘5 record, ⇧⌘7 shot with self-timer; add ⌃ to copy a shot to the clipboard instead (customizable in
+  Settings › Shortcuts)
+- **Menu bar**: every capture, Open Library, Settings and Stop are in the menu bar item; there is no
+  Record button to find in a window
+- **Library**: browse, search, rename and manage every recording, shot and GIF in one window
 
 ### For developers
 - **Pure transform**: `render(project, session, t)` — one function, two sinks, zero sync bugs
@@ -40,27 +47,36 @@ changed.
 - **Hardware H.264 encode**: optimized for 4K at 60 fps, with software fallback
 - **Modular architecture**: capture (Swift), preview/export (WebCodecs), and transform (pure TypeScript)
   cleanly separated
-- **Comprehensive test suite**: 137 tests covering pure logic, IPC, capture lifecycle, and E2E flows
+- **Comprehensive test suite**: pure logic, IPC, capture lifecycle, and E2E flows, plus gates that
+  need a real Mac or real Chrome
 
 ## Installation
 
 ### System Requirements
 
-- **OS**: macOS 14.0 or later (macOS 26.0+ tested)
+- **OS**: macOS 26.0 or later (the helper is built for `arm64-apple-macos26.0`)
+- **Chip**: Apple silicon (arm64)
 - **RAM**: 2GB minimum (4GB+ recommended for smooth 4K recording)
 - **Storage**: 10GB free space for typical recording sessions
 - **Permissions**: Screen Recording (required for capture), Input Monitoring (required for cursor recording)
 
 ### Download and Install
 
-There is no published release — no `.dmg`, no GitHub Releases download. Build it from source:
+Tester builds are published on the [Releases page](https://github.com/patcartelli/stc-screen-recorder/releases)
+as pre-releases: a signed, notarized arm64 `.dmg` with a `.sha256` beside it. Check the download against
+the hash before opening it, drag Capture to Applications, and launch it.
+
+To build it yourself instead:
 
 1. Clone the repo and `npm ci`
 2. `npm run app:package` — produces a signed `.app` at `release/mac-arm64/Capture.app` (see "Name
-   and identity" below for what "signed" means here: a dev-machine identity, not a notarized one)
+   and identity" below for what "signed" means for a local build: a dev-machine identity, not a
+   notarized one)
 3. Launch it from Finder or Spotlight (⌘Space)
-4. On first launch, macOS will prompt for Screen Recording permission — grant it
-5. Follow the same process for Input Monitoring when prompted
+
+On first launch a panel lists the permissions Capture still needs (Screen Recording, Input Monitoring)
+and asks for them; it covers the window until both are granted. A Screen Recording grant made while
+Capture is running takes effect after a relaunch, and the panel offers one.
 
 ### Permissions
 
@@ -84,36 +100,46 @@ tccutil reset ListenEvent com.github.Electron
 
 ### Recording
 
-1. Open **Capture**
-2. Use the **Scope** picker to choose what to record:
-   - **Screen**: entire display
-   - **Window**: a single window (opens overlay to select)
-   - **Area**: custom rectangular region (opens overlay to draw)
-3. Optional: Toggle **Camera** to include your face in the corner
-4. Press **Record** (or use global hotkey ⌃⌥⇧⌘3 for full screen)
-5. Perform your demo or tutorial
-6. Press **Stop** or close the window
+Capture lives in the menu bar; there is no Record button in a window.
 
-Recordings are saved to `~/Desktop/stc/<timestamp>/` and appear in the Library immediately.
+1. Press **⇧⌘5**, or choose **Record** from the Capture menu bar item
+2. A selection overlay covers each display. Drag an **area**, or press **Space** to switch to
+   **window** mode and click a window; expand the marquee to the whole display to record the screen.
+   Nothing is remembered between takes: you choose the scope every time
+3. A **record bar** sits on the selection: set the size, and choose the mic, system audio and
+   camera (the camera menu shows a live preview while it is open)
+4. Press **Capture Video**, then wait out the **countdown** (Return skips it, Esc cancels)
+5. A small **pill** shows the timer and level meter while you record; click **Stop** on it, or choose
+   Stop from the menu bar. Capture never appears in the take
+6. When the take ends, a **panel** appears at the screen corner: Save or Edit it, or let it go to the
+   Library
+
+Recordings are saved to `~/Desktop/stc/<timestamp>/` and appear in the **Library** (menu bar › Open
+Library) immediately.
 
 ### Editing
 
-1. In the Library, select a take and preview it
+1. In the Library, open a recording (or press Edit on its panel): it opens in the editor window
 2. Use the **Scrubber** to trim the start/end points (drag handles or use keyboard)
-3. Optional: Enable **Auto-Zoom** to intelligently frame interactions, or manually select zoom windows
+3. Optional: turn on **Auto-Zoom**, or add and tune zoom blocks by hand
 4. Set **Export Size** (defaults to capture resolution)
-5. Press **Export** to save as MP4
+5. Press **Export** to save as MP4 (or choose GIF)
 
-### Still Capture
+### Shots
 
-1. Use **Capture Still** (button in main window, hotkey ⌃⌥⇧⌘1/2, or menu bar icon)
-2. Select screen, window, or area
-3. A floating panel appears with the capture:
+1. Press **⇧⌘4** (area), **⇧⌘2** (window) or **⇧⌘3** (full display), or pick a Shot item in the menu
+   bar. **⇧⌘7** adds a self-timer. Add **⌃** (for example ⌃⇧⌘4) to copy straight to the clipboard
+   with no panel
+2. Choose the area or window on the overlay
+3. A floating panel appears with the shot:
    - **Copy**: paste into Slack, Mail, or other apps
    - **Save**: save to disk as PNG/HEIC/JPEG
    - **Redact**: black out sensitive information
    - **Reveal in Finder**: open the save location
-   - **Delete**: discard the capture
+   - **Delete**: discard the shot
+
+Capture's shortcuts only register while macOS's own screenshot shortcuts are off (System Settings ›
+Keyboard › Keyboard Shortcuts › Screenshots); Settings › Shortcuts says which keys something else holds.
 
 ## The architecture
 
@@ -174,10 +200,11 @@ Why? Because:
 - **Camera sync**: ~65ms lag between display and camera (inherent to the USB camera pipeline)
 - **Preview memory**: 4K videos use ~1.2x the file size in memory during preview; a 15-minute 4K take
   approaches the practical ceiling
-- **Auto-zoom stage 1**: Currently responds to clicks and drags only; keystroke-based changes are
-  recorded but not auto-zoomed (see auto-zoom stage 2, not yet implemented)
-- **No published release yet**: `npm run app:package` builds a real, signed `.app` locally, but
-  nothing is published for download — see "Name and identity" below
+- **Auto-zoom opens on clicks and drags only**: a plain move or a keystroke never starts a zoom
+  (keys are recorded and drawn as a keycast, but do not trigger one). Where it zooms comes from the
+  change track when a take has one, otherwise from the cursor
+- **Arm64 only**: releases are signed, notarized arm64 builds; a local `npm run app:package` build is
+  signed with a dev-machine identity and is not notarized — see "Name and identity" below
 
 ## Name and identity
 
@@ -194,10 +221,9 @@ loose end.**
   ("STC Dev Signing" — see `helper/build.sh`'s own signing, which uses the same certificate). macOS
   lists this build as **Capture** under Privacy & Security, `tccutil` takes
   `com.studiocartelli.capture`, and Spotlight/Raycast find it by typing "capture". This identity is
-  **not notarized** and is scoped to this machine — see the design spec
-  (`docs/superpowers/specs/2026-09-28-stc-401-packaging-design.md`) for why: nothing here is meant
-  to be handed to anyone else, so there's no Apple Developer Program membership or notarization step
-  involved.
+  **not notarized** and is scoped to this machine. The builds on the Releases page are a separate
+  route: Developer ID signed and notarized. See the design spec
+  (`docs/superpowers/specs/2026-09-28-stc-401-packaging-design.md`) for the local build's reasoning.
 - **`npm run app:start`** (the fast, unpackaged dev loop — `electron .` directly) never runs through
   electron-builder at all, so it still shows up as **Electron** under Privacy & Security, keyed to
   `com.github.Electron`, shared with every other unpackaged Electron app run the same way on this
@@ -291,7 +317,7 @@ Check that **Auto-Zoom** is enabled and set to an intensity level (not off). Als
 
 #### Prerequisites
 
-- **macOS 14.0+** with command-line tools: `xcode-select --install`
+- **macOS 26.0+** (Apple silicon) with command-line tools: `xcode-select --install`
 - **Node.js 24** or later: `node --version`
 - **swiftc**: Installed with Xcode command-line tools
 
@@ -481,34 +507,33 @@ The PR will run CI on: tests, type checking, linting, determinism gates, and slo
 
 ## Status
 
-**Phases 0–3 complete:** Record → Preview → Trim → Export, with real cursor artwork and camera
-picture-in-picture, all verified on hardware.
+**Phases 0–3 complete, and in tester beta:** Record → Preview → Trim → Export, with real cursor artwork
+and camera picture-in-picture, all verified on hardware.
 
 ### What's shipped
 
-- ✅ Screen capture (display + cursor events + camera)
-- ✅ Preview with seeking
-- ✅ Trim (start/end), export to MP4 H.264
-- ✅ Auto-zoom stage 1 (clicks/drags trigger zoom)
-- ✅ Manual zoom override (per-window geometry and easing)
-- ✅ Picture-in-picture camera
-- ✅ Audio: microphone and system audio capture, mixing with per-track levels and mutes, and narration cleanup
-- ✅ Screenshot stills with decoration (effects, redaction, annotation)
-- ✅ Library with search and organize
-- ✅ Real macOS cursor art (arrow, I-beam, hand, crosshair)
-- ✅ Global hotkeys (customizable)
-- ✅ Menu bar quick capture
+- ✅ Screen, window and area capture with cursor events, camera, microphone and system audio
+- ✅ Record flow from the menu bar or ⇧⌘5: overlay, record bar, countdown, pill, panel, Library
+- ✅ Preview with seeking; trim; export to MP4 H.264 or GIF
+- ✅ Auto-zoom: stage 1 (clicks and drags decide when) and stage 2 (the change track decides where)
+- ✅ Manual zoom blocks (geometry, easing, follow cursor)
+- ✅ Picture-in-picture camera with styles, framing and presets
+- ✅ Show keystrokes (commands only; typing is never recorded)
+- ✅ Audio mixing with per-track levels and mutes, and narration cleanup
+- ✅ Shots with decoration (backgrounds, wallpaper look), redaction and annotation
+- ✅ Library of recordings, shots and GIFs, with search
+- ✅ Real macOS cursor art
+- ✅ Global shortcuts that follow macOS's screenshot keys (customizable)
+- ✅ Signed, notarized arm64 tester builds on the Releases page
 
-### In progress / planned (phase 4+)
+### In progress / planned
 
-- ⏳ Auto-zoom stage 2 (change detection decides WHERE to zoom)
 - ⏳ HDR support
-- ⏳ Multi-monitor recording
-- 🔄 Keyboard input recording (privacy consideration — scope TBD)
+- ⏳ Multi-display recording in one take
 
 ### Diagnostics and testing
 
-- 137 tests covering pure logic, IPC, and E2E flows
+- Pure-logic, IPC, capture and E2E test suites (`npm test`, `npm run test:capture`)
 - Determinism gate proves preview/export byte-equivalence
 - Capture tests with real ScreenCaptureKit
 - Gate-skip monitoring for CI reliability
