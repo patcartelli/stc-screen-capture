@@ -2913,11 +2913,17 @@ ipcMain.handle("recorder:stop", async () => {
 
 // ---- the library: one index over two kinds (STC-294) ----------------------
 
+let libraryFailsLeft: number | undefined;
 ipcMain.handle("library:list", async (_e, filter?: string) => {
   // STC-521: the loading state only exists while the scan is slow, and a scan
   // of a test fixture never is. This makes it reachable on purpose.
   const slow = Number(process.env.STC_LIBRARY_SLOW_MS);
   if (slow > 0) await new Promise((r) => setTimeout(r, slow));
+  // STC-663: a scan that THROWS (not a missing or unreadable folder, which
+  // `listLibrary` answers). Rejects the first N calls so the test can also
+  // press Try again.
+  if (libraryFailsLeft === undefined) libraryFailsLeft = Number(process.env.STC_LIBRARY_FAIL_FIRST) || 0;
+  if (libraryFailsLeft > 0) { libraryFailsLeft--; throw new Error("scan failed (STC_LIBRARY_FAIL_FIRST)"); }
   return listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
                      typeof filter === "string" ? filter : undefined);
 });

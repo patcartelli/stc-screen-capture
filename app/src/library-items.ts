@@ -752,7 +752,7 @@ export const UPDATING_NOTE = "Checking for new captures…";
 export type PlaceholderAction = "retry" | "choose-folder";
 
 export interface LibraryPlaceholder {
-  state: "loading" | "empty" | "filtered" | "missing" | "unreadable";
+  state: "loading" | "empty" | "filtered" | "missing" | "unreadable" | "failed";
   title: string;
   body: string;
   /** The folder's path when the sentence is about it, shown on its own line. */
@@ -778,6 +778,13 @@ export function searchPlaceholder(query: string): LibraryPlaceholder {
 export const LOADING_PLACEHOLDER: LibraryPlaceholder = {
   state: "loading", title: "Loading your captures…",
   body: "Reading the folder.", actions: [],
+};
+
+/** The scan itself threw (STC-663): not a lost folder, which has its own sentences. */
+export const FAILED_PLACEHOLDER: LibraryPlaceholder = {
+  state: "failed", title: "Couldn’t load your captures",
+  body: "Something went wrong reading the folder. Your captures haven’t been removed.",
+  actions: ["retry"],
 };
 
 /**

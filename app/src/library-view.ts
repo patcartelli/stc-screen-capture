@@ -167,7 +167,7 @@ function placeholderCard(p: LibraryPlaceholder, act: (a: PlaceholderAction) => v
   card.id = p.state === "empty" || p.state === "filtered" ? "empty" : "libstate";
   card.dataset.state = p.state;
   // Only a problem interrupts a screen reader; loading and empty are polite.
-  card.setAttribute("role", p.state === "missing" || p.state === "unreadable" ? "alert" : "status");
+  card.setAttribute("role", p.state === "missing" || p.state === "unreadable" || p.state === "failed" ? "alert" : "status");
   if (p.state === "loading") card.append(el("div", "libspinner"));
   card.append(el("div", "libplacetitle", p.title), el("div", "libplacebody", p.body));
   if (p.path) card.append(el("code", "libplacepath", p.path));
@@ -190,11 +190,12 @@ const PLACEHOLDER_LABELS: Record<PlaceholderAction, string> = {
 };
 
 /** Just a placeholder, before there is any list to draw around it. */
-export function renderPlaceholderOnly(host: HTMLElement, p: LibraryPlaceholder): void {
+export function renderPlaceholderOnly(host: HTMLElement, p: LibraryPlaceholder,
+                                      act: (a: PlaceholderAction) => void = () => {}): void {
   closeOverflow();
   host.textContent = "";
   host.setAttribute("aria-busy", String(p.state === "loading"));
-  host.append(placeholderCard(p, () => {}));
+  host.append(placeholderCard(p, act));
 }
 
 /**
