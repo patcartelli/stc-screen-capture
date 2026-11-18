@@ -1,0 +1,59 @@
+name: Capture tester feedback
+description: Report a bug or an idea for Capture
+title: "[Tester] "
+labels: ["tester"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Capture. Tell us what happened, what you expected, and attach a screenshot or recording if you can.
+
+        **App version:** Capture menu > About.
+        **macOS version:** Apple menu > About This Mac.
+        **Diagnostics:** open the Library window and choose **Show diagnostics**. Screenshot the table it shows and attach it below. Capture writes no log file, so this is the place to look.
+  - type: input
+    id: title-summary
+    attributes:
+      label: Summary
+      description: "One line: what went wrong, or the idea."
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: What you did and what you saw.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What you thought should happen instead.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps. Say which capture type you used - recording, screenshot, or GIF.
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "e.g. macOS 15.4"
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Capture app version
+      description: From the app's About window.
+    validations:
+      required: true
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Screenshot or recording
+      description: Drag files into this box. Attach a screenshot, a short recording, and the Show diagnostics screenshot if you have one.

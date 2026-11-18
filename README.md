@@ -66,6 +66,10 @@ Tester builds are published on the [Releases page](https://github.com/patcartell
 as pre-releases: a signed, notarized arm64 `.dmg` with a `.sha256` beside it. Check the download against
 the hash before opening it, drag Capture to Applications, and launch it.
 
+Found a bug or have an idea? [Send tester feedback](https://github.com/patcartelli/stc-screen-capture/issues/new?template=tester-feedback.yml).
+It asks for what happened, what you expected, your macOS and Capture versions, and a screenshot or
+recording, and you need a GitHub account to send it.
+
 To build it yourself instead:
 
 1. Clone the repo and `npm ci`
