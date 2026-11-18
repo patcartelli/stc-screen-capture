@@ -81,14 +81,20 @@ Work through these in order. Each one takes a minute or two.
   tccutil reset ListenEvent com.studiocartelli.capture
   ```
   Then open Capture, grant both permissions, and relaunch.
+- **Stopping from the menu-bar menu gets recorded.** If you stop a recording
+  by clicking Capture's menu-bar item while it is over the area being
+  recorded, that click is recorded as a click and starts an automatic zoom at
+  the end of your video. Stop with the **pill** or the **keyboard shortcut**
+  instead.
 - **Crash when choosing "Relaunch Capture".** Seen once during testing and not reproduced since. If it happens, note the time and send us the log output from the report section below.
 
 ## How to update
 
 1. Quit Capture.
 2. Delete the old Capture from Applications.
-3. Download the new .dmg from the same link as before (https://github.com/patcartelli/stc-screen-capture/releases/tag/v1.0.1).
-4. Check it against the new checksum (see [Check the download](#check-the-download)).
+3. Go to the same place as before, https://github.com/patcartelli/stc-screen-capture/releases,
+   and download the newest .dmg (the top one).
+4. Check it against the checksum shown on that release (see [Check the download](#check-the-download)).
 5. Install it as you did the first time.
 
 Your settings and recordings carry over. Settings live outside the app, and
@@ -98,15 +104,17 @@ from the code, not yet run.]
 
 ## Report a problem
 
-Use the feedback form: [FEEDBACK FORM LINK, SEPARATE TICKET].
+Use the feedback form: https://github.com/patcartelli/stc-screen-capture/issues/new?template=tester-feedback.yml
+(you need a free GitHub account to submit it).
 
 Please include:
 
 - What you were doing, and what you expected to happen.
 - What happened instead, and roughly when.
 - Your macOS version (Apple menu > About This Mac).
-- The logs: [CONFIRM. The app prints its diagnostics to the terminal only; no
-  log file is written today, so this item needs a decision before the page ships.]
+- The diagnostics: open the Library window, choose **Show diagnostics**, and
+  attach a screenshot of the table it shows. Capture writes no log file, so
+  this is where to look.
 - A screenshot if you can take one.
 
 Please **don't** send a recording of something private unless you have
