@@ -24,6 +24,18 @@
  *
  * plus `STC_NO_SHUTTER=1`, so a capture makes no sound on the machine.
  *
+ * **The helper (STC-683).** An app launched here runs `_fake-helper.mjs`, never
+ * the real Swift binary, unless the launch says `helper: "real"` AND `why`.
+ * The real helper runs Vision's `warm-text` at every start (~45 s the first
+ * time a binary does), probes permissions, may run `prime-capture` (a flash of
+ * the recording indicator) and calls ScreenCaptureKit outside
+ * `vitest.screencapturekit-files.ts`'s serial list; it also makes a suite's
+ * result depend on whether `helper/build/` exists on the runner and how fresh
+ * it is. A test that needs the real one (an ImageIO encode, the real
+ * handshake) opts in, and `e2e-user-data-isolation.test.ts` pins the list of
+ * files that may. A test's own `STC_HELPER_BIN` still wins, for a stand-in
+ * variant or a missing binary.
+ *
  * A test may pass its own value for any root (a prepared library, a log it
  * reads back), and that value must be a folder under the system temp
  * directory: anything else throws before the app starts. `rootsOf(app)` gives
@@ -37,7 +49,17 @@ import { mkdtempSync, realpathSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep, dirname } from "node:path";
 
-type LaunchOptions = NonNullable<Parameters<typeof electron.launch>[0]>;
+type ElectronLaunchOptions = NonNullable<Parameters<typeof electron.launch>[0]>;
+
+/** The stand-in every e2e app spawns by default. */
+export const FAKE_HELPER = join(__dirname, "_fake-helper.mjs");
+
+/**
+ * `electron.launch`'s options, plus the helper choice. `helper: "real"` needs
+ * `why`, one sentence on what only the real binary can show; a bare opt-in
+ * throws, so the reason lives beside the launch and the guard can list it.
+ */
+export type LaunchOptions = ElectronLaunchOptions & { helper?: "fake" | "real"; why?: string };
 
 /** Every env var that names a folder the app writes to. Order is the table's. */
 export const ROOT_ENV = ["STC_RECORDINGS_DIR", "STC_TEMP_TAKES_DIR", "STC_COPIES_DIR", "STC_TRASH_DIR"] as const;
@@ -80,7 +102,11 @@ function refuse(what: string, value: string): never {
 }
 
 /** `electron.launch`, with every root the app writes to pointed at a temp folder. */
-export async function launchIsolated(opts: LaunchOptions = {}): Promise<ElectronApplication> {
+export async function launchIsolated(options: LaunchOptions = {}): Promise<ElectronApplication> {
+  const { helper = "fake", why, ...opts } = options;
+  if (helper === "real" && !why) {
+    throw new Error('launchIsolated: helper: "real" needs a `why`, one sentence on what only the real binary shows (STC-683)');
+  }
   const args = [...(opts.args ?? [])];
   const given = args.find((a) => a.startsWith(USER_DATA_FLAG));
   let userData: string;
@@ -106,6 +132,11 @@ export async function launchIsolated(opts: LaunchOptions = {}): Promise<Electron
   for (const name of ROOT_ENV) env[name] = roots[name];
   env.STC_PASTEBOARD = roots.pasteboard;
   env.STC_NO_SHUTTER = caller.STC_NO_SHUTTER ?? "1";
+  // STC-683: the stand-in unless the test asked for the real one by name. An
+  // inherited STC_HELPER_BIN is the developer's shell, not the test's choice.
+  if (caller.STC_HELPER_BIN !== undefined) env.STC_HELPER_BIN = caller.STC_HELPER_BIN;
+  else if (helper === "fake") env.STC_HELPER_BIN = FAKE_HELPER;
+  else delete env.STC_HELPER_BIN;
 
   const app = await electron.launch({ ...opts, args, env });
   launched.set(app, roots);

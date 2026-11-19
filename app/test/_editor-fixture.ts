@@ -24,7 +24,7 @@ const root = join(__dirname, "..", "..");
  * what a fresh profile happens to produce.
  */
 export async function launchApp(dir: string, env: Record<string, string> = {},
-    opts: { userData?: string; ready?: string } = {}):
+    opts: { userData?: string; ready?: string; helper?: "fake" | "real"; why?: string } = {}):
     Promise<{ app: ElectronApplication; win: Page }> {
   // `opts.userData` reuses a profile a previous launch in the same test made
   // (STC-454: a setting that must survive a restart); seeded only when new.
@@ -35,6 +35,7 @@ export async function launchApp(dir: string, env: Record<string, string> = {},
     }));
   }
   const app = await launchIsolated({
+    helper: opts.helper, why: opts.why,
     args: [root, `--user-data-dir=${userData}`], cwd: root,
     env: {
       STC_RECORDINGS_DIR: dir,
@@ -111,12 +112,14 @@ export async function waitForTakeLoaded(editorWin: Page, timeout = 30_000): Prom
  * window's own page — the player moved there, out of the main window's old
  * in-page `#player`.
  */
-export async function launchWithTakeInEditor(opts: { pip?: boolean; env?: Record<string, string>; source?: string } = {}):
+export async function launchWithTakeInEditor(opts: {
+  pip?: boolean; env?: Record<string, string>; source?: string; helper?: "fake" | "real"; why?: string;
+} = {}):
     Promise<{
       app: ElectronApplication; win: Page; editorWin: Page; takeDir: string; dir: string;
     }> {
   const { dir, takeDir } = opts.pip ? makePipTakeFolder() : makeTakeFolder(undefined, { source: opts.source });
-  const { app, win } = await launchApp(dir, opts.env ?? {});
+  const { app, win } = await launchApp(dir, opts.env ?? {}, { helper: opts.helper, why: opts.why });
   const editorWin = await openEditorFromLibrary(app, win);
   return { app, win, editorWin, takeDir, dir };
 }
