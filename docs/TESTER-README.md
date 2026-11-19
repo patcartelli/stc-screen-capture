@@ -54,8 +54,9 @@ Capture asks for four permissions. Each one is for one thing.
 
 Notes:
 
-- Input Monitoring is the one people miss. It is **not** under Accessibility.
-  If a recording has no cursor, check this one first.
+- Capture asks for Input Monitoring the first time you start a video
+  recording, not at launch, so expect that prompt then. It is **not** under
+  Accessibility. If a recording has no cursor, check this one first.
 - After you grant **Screen Recording**, macOS may ask you to quit and reopen
   Capture. Do that. The grant does not take effect until you do.
 - If you turn a permission off later, you may need to grant it again.
