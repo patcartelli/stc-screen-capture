@@ -123,7 +123,7 @@ import {
   type LibraryCallbacks,
 } from "./library-view.js";
 import {
-  placeholderFor, searchPlaceholder, applySearch, countLabel, LOADING_PLACEHOLDER, UPDATING_NOTE,
+  placeholderFor, searchPlaceholder, applySearch, countLabel, LOADING_PLACEHOLDER, FAILED_PLACEHOLDER, UPDATING_NOTE,
   UPDATING_SHOW_AFTER_MS,
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
@@ -784,6 +784,18 @@ async function refreshTakes(): Promise<void> {
   let list: LibraryList;
   try {
     list = await recorder.library(libraryFilter);
+  } catch (err) {
+    // STC-663: a scan that threw says so and offers Try again; the loading
+    // placeholder must never outlive the request that drew it.
+    clearTimeout(slow);
+    console.error("library scan failed", err);
+    if (isCurrent()) {
+      libraryDrawn = false;
+      lastList = undefined;
+      $("libcount").textContent = "";
+      renderPlaceholderOnly(host, FAILED_PLACEHOLDER, (a) => void onPlaceholderAction(a));
+    }
+    return;
   } finally {
     clearTimeout(slow);
   }

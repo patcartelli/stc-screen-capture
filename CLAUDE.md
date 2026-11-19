@@ -7,6 +7,7 @@ events → deterministic transform → CFR MP4 with cursor overlay.
 
 | path | what |
 |---|---|
+| `docs/BRIEF.md` | **the conventions document** (STC-662): every locked decision with its status and evidence, and the design rules (type, theme, accent, raw colour, spacing, motion, focus) as they are now. Change its row in the same PR as the decision. `AGENTS.md` is only a pointer to this file |
 | `PHASE-1.md` | current phase plan — read this first |
 | `docs/PHASE-0-FINDINGS.md` | spike results; all settled decisions sourced here |
 | `docs/HANDOFF-2026-08-31.md` | what moved on 2026-08-31, what was got wrong, and the one open question |
@@ -230,10 +231,13 @@ events → deterministic transform → CFR MP4 with cursor overlay.
 | `withinZoomLimits`, `isRegionOfFrame`, `ZOOM_AMOUNT_MIN`/`MAX` (`transform/src/zoom-override.ts`), `transform/test/zoom-rect-limits.test.ts` | **a zoom region is held to the Amount limits, 1.1x to 4x, wherever it comes from** (STC-653). The two limits live in `zoom-override.ts` (`override-edit.ts` re-exports them for the slider) and ONE hold reads them: a region inside the limits and the frame comes back as the same object, anything else is resized about its centre and slid inside. Three callers: `rectFromGesture` (a drag from the frame's edge outward was 0 x 0), `cleanOverrideRect`, and `resolvedCrop`, the one door a tuned rect takes into `render()`. The loader DROPS a rect that is not a region of the frame (zero, negative, outside 0..1) and KEEPS-and-holds a real region outside the limits, because older builds saved those from an ordinary drag. `TRANSFORM_VERSION` 21: only documents with rects outside the limits render differently |
 | `app/src/settings-renderer.ts` (the default framing), `docs/STC-642-RUNBOOK.md` | **Settings > Camera sets a default PiP framing** (STC-642). It lives IN Settings' `pipStyle` as `framing` (centre + zoom; `cleanPipStyle` is still the one validator), so the editor's "Use as default" carries a take's framing too. `cleanStoredPipStyle` drops one equal to `DEFAULT_FRAMING`: no framing = today's behaviour byte for byte. `defaultStyleForTake` seeds it into a new camera take with the rest of the style; the take's Reframe owns its copy after. No `render()` change. Settings draws the live view through `framingSource` at the live camera's aspect; Reframe makes a drag or the arrows pan the PICTURE under the fixed PiP, Zoom is a row (and the wheel while reframing), thirds guides (`framingGuides`, shared with the editor) show only while reframing, and both wait for a live picture. e2e: the fake helper's `STC_FAKE_CAMERA_PREVIEW=1` |
 
-## Where things stand (2026-08-26)
+## Where things stand
 
-**Phases 0, 1 and 2 are complete.** The app records, previews and exports, verified on real
-hardware and confirmed by eye on the composited cursor. 137 tests, four gates.
+**Phases 0, 1 and 2 are complete, and the app has shipped well past them** (the table above is the
+inventory). The app records, previews and exports, verified on real hardware and confirmed by eye on
+the composited cursor. The test and gate counts move every week, so they are not written here:
+`npm test` prints the first, and the `gate*` scripts in `package.json` are the second. For decisions
+and design rules, read `docs/BRIEF.md`.
 
 CI on `master` went red on 2026-08-25 (the `#6` and `#7` merges) with the STC-254 crash —
 intermittent, so PR runs passed while the push runs failed. Root-caused and fixed on 2026-08-26;
@@ -439,18 +443,6 @@ See `PHASE-1.md` → "Settled by phase 0" for the full table. The ones most like
   or TCC, and build.sh already falls back to the unfiltered list. **Do not open Keychain Access to
   "fix" it** — on macOS 27.0 it hung hard enough to require a force reset, and the setting buys
   nothing.
-
-## Increment 0 — what to build next
-
-1. Write `events.json`, `anchors.json`, and `project` schemas (versioned; `project` holds
-   PiP geometry, cursor style, output fps — the edit document, even if it's 3 fields for now).
-2. Hand-author a 5-second fixture session (no capture) containing cursor motion that exercises
-   easing across VFR grid boundaries.
-3. Implement `render(project, events, t)` against the fixture — no WebCodecs or DOM dependencies.
-4. Wire two sinks: canvas preview + WebCodecs encode (demux via mp4box.js).
-5. Gate: for 200 sampled `t`, the pre-encode RGBA buffer from each sink is byte-identical.
-   Two independent exports produce matching pre-encode hashes. Encoded MP4s need not be
-   byte-identical (container timestamps and encoder state are not contractually deterministic).
 
 ## Phase 1 scope (sprint)
 
