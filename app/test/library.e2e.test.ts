@@ -209,6 +209,19 @@ describe("the library grid", () => {
     expect(await win.locator("#libstate button[data-placeholder='choose-folder']").count()).toBe(1);
   }, 60_000);
 
+  // STC-663: a scan that THROWS used to leave "Loading…" up forever.
+  test("a scan that fails says so, announces it, and Try again recovers", async () => {
+    const { win } = await launch(() => {}, { STC_LIBRARY_FAIL_FIRST: "1" });
+    const state = win.locator("#libstate[data-state='failed']");
+    await expect.poll(() => state.count(), { timeout: 15_000 }).toBe(1);
+    expect(await state.innerText()).toContain("Couldn’t load your captures");
+    expect(await state.getAttribute("role")).toBe("alert");
+    expect(await win.locator("#libstate[data-state='loading']").count()).toBe(0);
+    await state.locator("button[data-placeholder='retry']").click();
+    await expect.poll(() => win.locator("#empty").count(), { timeout: 15_000 }).toBe(1);
+    expect(await win.locator("#libstate").count()).toBe(0);
+  }, 60_000);
+
   test("a stills-only library lists them as stills, not as broken recordings", async () => {
     // The bug this ticket fixes: before the adapter, a still had no anchors.json
     // and so was reported as a damaged recording in the invalid list.
