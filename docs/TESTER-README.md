@@ -13,7 +13,10 @@ anything about the code.
 
 ## Install
 
-1. Download **Capture-1.0.1-arm64.dmg** from https://github.com/patcartelli/stc-screen-capture/releases/tag/v1.0.1.
+1. Open the Google Drive folder link we sent you and download
+   **Capture-1.0.1-arm64.dmg**. The file is large (about 114 MB), so Drive
+   shows a page saying it "can't scan for viruses". That is expected: click
+   **Download anyway**.
 2. Check the download (see [Check the download](#check-the-download)).
 3. Open the .dmg and drag **Capture** into **Applications**.
 4. Open Capture from Applications. It should open without a warning, because
@@ -24,7 +27,7 @@ says (see [Report a problem](#report-a-problem)).
 
 ### Check the download
 
-Each release has a checksum next to the .dmg. It is a short line of letters
+Next to the .dmg in the Drive folder is a checksum (a `.sha256` file). It is a short line of letters
 and numbers that proves the file is exactly the one we built. In Terminal,
 from the folder you downloaded to:
 
@@ -93,9 +96,9 @@ Work through these in order. Each one takes a minute or two.
 
 1. Quit Capture.
 2. Delete the old Capture from Applications.
-3. Go to the same place as before, https://github.com/patcartelli/stc-screen-capture/releases,
-   and download the newest .dmg (the top one).
-4. Check it against the checksum shown on that release (see [Check the download](#check-the-download)).
+3. Open the same Drive folder link as before (it doesn't change) and download
+   the newest .dmg in it, using **Download anyway** on the virus-scan page.
+4. Check it against the checksum for that version in the same folder (see [Check the download](#check-the-download)).
 5. Install it as you did the first time.
 
 Your settings and recordings carry over. Settings live outside the app, and
