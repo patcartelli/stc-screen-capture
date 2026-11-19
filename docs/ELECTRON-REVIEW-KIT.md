@@ -210,8 +210,8 @@ Find:
    step-0.md), settings keys nothing reads.
 
 5. The docs as a copy: CLAUDE.md table rows describing files that no longer
-   exist or no longer do what the row says. (AGENTS.md is regenerated from
-   CLAUDE.md — review CLAUDE.md only.)
+   exist or no longer do what the row says. (AGENTS.md is a pointer to
+   CLAUDE.md since STC-662 — review CLAUDE.md only.)
 
 For each: both locations, whether they have ALREADY drifted (a live bug) or
 merely could (a hazard), and which one should be the owner.
