@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,13 +34,13 @@ afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, AP
 async function launch(opts: {
   userData: string; recordings: string; startLog?: string; camera?: string;
 }) {
-  app = await electron.launch({
+  app = await launchIsolated({
     // Electron honours --user-data-dir, which is what makes "sticky" testable:
     // a second launch against the same directory is a genuine restart.
     args: [root, `--user-data-dir=${opts.userData}`],
     cwd: root,
     env: {
-      ...process.env,
+      
       STC_RECORDINGS_DIR: opts.recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_HELPER_BIN: FAKE_HELPER,
       // Record now opens the real overlay (STC-388) — same reason

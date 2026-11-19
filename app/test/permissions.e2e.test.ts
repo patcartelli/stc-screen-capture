@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,11 +22,11 @@ afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, AP
 
 async function launch(permissions: string) {
   const cmdLog = join(mkdtempSync(join(tmpdir(), "stc-cmdlog-")), "cmds.txt");
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
     cwd: root,
     env: {
-      ...process.env,
+      
       STC_ASSUME_PERMISSIONS: "",
       STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")),
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),

@@ -62,10 +62,37 @@ describe("web-contents-created guard (STC-466)", () => {
     const { app: a, win } = await launchApp(dir);
     app = a;
 
-    const wrote = await win.evaluate(async () => {
-      try { await navigator.clipboard.writeText("stc-466 clipboard probe"); return true; }
-      catch { return false; }
+    // STC-658: the one write no seam can redirect. `STC_PASTEBOARD` points the
+    // helper and main at a private pasteboard, but Chromium's
+    // `navigator.clipboard` always writes the system one, and the point here
+    // is the real web API through the real permission handler. So the test
+    // puts back what the person had: text, HTML, RTF and an image, the formats
+    // Electron can read and write back together. Anything else (a file copied
+    // in the Finder, say) is not restored, which is why this stays the only
+    // renderer clipboard write in the suite.
+    const saved = await a.evaluate(({ clipboard }) => {
+      const image = clipboard.readImage();
+      return {
+        text: clipboard.readText(), html: clipboard.readHTML(), rtf: clipboard.readRTF(),
+        png: image.isEmpty() ? "" : image.toPNG().toString("base64"),
+      };
     });
+    let wrote = false;
+    try {
+      wrote = await win.evaluate(async () => {
+        try { await navigator.clipboard.writeText("stc-466 clipboard probe"); return true; }
+        catch { return false; }
+      });
+    } finally {
+      await a.evaluate(({ clipboard, nativeImage }, s) => {
+        clipboard.clear();
+        clipboard.write({
+          ...(s.text ? { text: s.text } : {}), ...(s.html ? { html: s.html } : {}),
+          ...(s.rtf ? { rtf: s.rtf } : {}),
+          ...(s.png ? { image: nativeImage.createFromBuffer(Buffer.from(s.png, "base64")) } : {}),
+        });
+      }, saved);
+    }
     expect(wrote).toBe(true);
   }, 60_000);
 });

@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,13 +45,13 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   const { dir: recordings } = makeTakeFolder();
   const tempTakes = mkdtempSync(join(tmpdir(), "stc-temp-"));
   const stillLog = join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
     cwd: root,
     // The overlay must not take input from the window server while this suite
     // is injecting its own: a real pointermove landing mid-gesture rewrites the
     // marquee, which is what made this file flaky on master. See overlay.ts.
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes, STC_HELPER_BIN: FAKE_HELPER,
+    env: { STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes, STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_STILL_LOG: stillLog, STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });
   await stubQuitDialog(app);

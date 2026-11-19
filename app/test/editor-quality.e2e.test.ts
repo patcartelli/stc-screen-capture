@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,10 +34,10 @@ async function launch(): Promise<Launched> {
   const { dir: recordings, takeDir } = makeTakeFolder(TAKE);
   const copies = mkdtempSync(join(tmpdir(), "stc-copies-"));
   const copyLog = join(mkdtempSync(join(tmpdir(), "stc-log-")), "copy.log");
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: recordings,
+      STC_RECORDINGS_DIR: recordings,
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_COPIES_DIR: copies, STC_FAKE_COPY_LOG: copyLog,
       STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1",

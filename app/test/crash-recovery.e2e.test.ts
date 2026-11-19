@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,11 +83,11 @@ interface Launched {
 
 /** Launch, stubbing the recovery dialog before the app can reach it. */
 async function launch(s: Seeded, response: 0 | 1): Promise<Launched> {
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${s.userData}`],
     cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: s.recordings, STC_TEMP_TAKES_DIR: s.tempTakes,
+      STC_RECORDINGS_DIR: s.recordings, STC_TEMP_TAKES_DIR: s.tempTakes,
       STC_NO_SHUTTER: "1",
     },
   });

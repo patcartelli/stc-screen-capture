@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,10 +22,10 @@ async function launch() {
   // Never write takes to the real ~/Desktop/stc from an automated run.
   // STC-403: isolated from the developer's real settings too, same as every
   // other fixture — this used to load the real ~/Library/.../settings.json.
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")),
+      STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")),
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_OVERLAY_SYNTHETIC_INPUT: "1",
     },

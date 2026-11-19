@@ -6,7 +6,8 @@
  * nobody runs.
  */
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, cpSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { makeTakeFolder } from "./_take-fixture.js";
@@ -90,10 +91,10 @@ async function launchWithTake() {
   // the backend both environments can always provide.
   // STC-403: isolated from the developer's real settings too, same as every
   // other fixture — this used to load the real ~/Library/.../settings.json.
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, ...SOFTWARE_RENDER_ARGS, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: dir,
+      STC_RECORDINGS_DIR: dir,
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       // STC-502: launch shows no window. This project does not load
       // `_e2e-setup.ts`, which is what sets this for the e2e suite.

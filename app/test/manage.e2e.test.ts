@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication } from "playwright";
+import { launchIsolated, rootsOf } from "./_launch.js";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,8 +33,8 @@ async function launch(recordings: string) {
   // raced every other suite doing the same on app/dist/ — see that file.
   // STC-403: isolated from the developer's real settings, same as every
   // other fixture — this used to load the real ~/Library/.../settings.json.
-  app = await electron.launch({ args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), } });
+  app = await launchIsolated({ args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
+    env: { STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), } });
   const win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   return win;
@@ -78,28 +79,11 @@ describe("take management", () => {
     expect(existsSync(join(dir, "2026-08-24_11-00-00"))).toBe(false);
 
     // "It vanished" is what rm -rf looks like too. The claim is that it is
-    // RECOVERABLE, so check it actually landed in the Trash.
-    //
-    // Asked through Electron on purpose: ~/.Trash is TCC-protected, and the
-    // process running these tests cannot read it while the app can. Checking
-    // from here would report an empty Trash and quietly turn this into an
-    // assertion about nothing.
-    // getBuiltinModule, not import(): vitest's SSR transform rewrites a dynamic
-    // import inside evaluate() into __vite_ssr_dynamic_import__, which does not
-    // exist in the Electron process the code is shipped to.
-    // existsSync on the exact path, not readdir: macOS refuses to ENUMERATE
-    // ~/.Trash (EPERM on scandir without Full Disk Access) while still allowing
-    // a targeted stat. getBuiltinModule rather than import(), because vitest's
-    // SSR transform rewrites dynamic imports into something that does not exist
-    // in the Electron process this code is shipped to.
-    const trashed = await app!.evaluate(({ app: electronApp }) => {
-      const fs = (process as any).getBuiltinModule("node:fs");
-      const path = (process as any).getBuiltinModule("node:path");
-      const p = path.join(electronApp.getPath("home"), ".Trash", "2026-08-24_11-00-00");
-      const there = fs.existsSync(p);
-      try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* leave it in Trash */ }
-      return there;
-    });
+    // RECOVERABLE, so check it actually landed in the Trash. STC-658: the
+    // launcher points the Trash at a temp folder of this app's own
+    // (`STC_TRASH_DIR`, `machine-seams.ts`), so this reads that folder and the
+    // developer's real ~/.Trash is never touched, in either direction.
+    const trashed = existsSync(join(rootsOf(app!).STC_TRASH_DIR, "2026-08-24_11-00-00", "anchors.json"));
     expect(trashed, "the take is not in the Trash — it was destroyed").toBe(true);
     // The other take is untouched.
     expect(existsSync(join(dir, "2026-08-24_10-00-00"))).toBe(true);

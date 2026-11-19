@@ -51,6 +51,7 @@ import {
   startCopyRender, cancelCopyRender, cancelAllCopyRenders, copyRenderInFlight, copyRenderFormat,
 } from "./copy-render-window.js";
 import { GifCache } from "./gif-cache.js";
+import { installTrashSeam, writeClipboardText } from "./machine-seams.js";
 import { panelReason, panelAction, isHelperDecidedStop, stopCause, isStopActionId, trackLossLine, type StopAction } from "./stop-copy.js";
 import {
   copyPathFor, editCopyPathFor, editGifCopyPathFor, gifCopyPathFor, savedGifName, PARTIAL_SUFFIX,
@@ -130,6 +131,8 @@ import {
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
+// STC-658: a test's own folder in place of the Trash, before anything can trash.
+installTrashSeam(shell);
 /**
  * Unpackaged vs packaged resolution lives in `resolveHelperPath`
  * (STC-401) so it's unit-testable without Electron. Overridable via
@@ -2715,7 +2718,7 @@ async function pickColorAndAnnounce(): Promise<void> {
       }
     }
     if (outcome.kind === "copied") {
-      clipboard.writeText(outcome.hex);
+      writeClipboardText(outcome.hex, { writeText: (t) => clipboard.writeText(t) });
       showNotice(outcome.toast);
     } else if (outcome.kind === "failed") {
       console.error("[color] pick failed:", outcome.toast.body);
@@ -2755,7 +2758,7 @@ async function captureTextAndAnnounce(): Promise<void> {
     } finally {
       clearTimeout(slow);
     }
-    if (outcome.kind === "copied") clipboard.writeText(outcome.text);
+    if (outcome.kind === "copied") writeClipboardText(outcome.text, { writeText: (t) => clipboard.writeText(t) });
     if (outcome.kind === "failed") console.error("[text] capture failed:", outcome.toast.body);
     showNotice(outcome.toast);
   } catch (e) {

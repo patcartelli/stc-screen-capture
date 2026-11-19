@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, readFileSync, existsSync, readdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,10 +32,10 @@ describe("quitting while recording", () => {
   test("stops the recording, waits for the stop, then quits the helper", async () => {
     const log = join(mkdtempSync(join(tmpdir(), "stc-cmdlog-")), "cmds.txt");
     const { dir: recordings } = makeTakeFolder();
-    app = await electron.launch({
+    app = await launchIsolated({
       args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
       cwd: root,
-      env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
+      env: { STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
              // Slow enough that a quit which does not wait for the stop leaves
              // the process before the quit command is ever written.
              STC_FAKE_CMD_LOG: log, STC_FAKE_STOP_DELAY_MS: "1500",
@@ -111,11 +112,11 @@ describe("quitting with unhandled takes (STC-392 D8)", () => {
       Promise<{ win: Page; recordings: string; temp: string }> {
     const { dir: recordings } = makeTakeFolder();
     const temp = mkdtempSync(join(tmpdir(), "stc-temp-"));
-    app = await electron.launch({
+    app = await launchIsolated({
       args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
       cwd: root,
       env: {
-        ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp,
+        STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp,
         STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1", ...extraEnv,
       },
     });

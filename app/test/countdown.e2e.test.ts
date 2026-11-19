@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,10 +75,10 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   const tempTakes = mkdtempSync(join(tmpdir(), "stc-temp-"));
   const startLog = join(logs, "start.jsonl");
   const stillLog = join(logs, "still.jsonl");
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${ud}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes,
+    env: { STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes,
            STC_HELPER_BIN: FAKE_HELPER,
            STC_FAKE_START_LOG: startLog, STC_FAKE_STILL_LOG: stillLog,
            STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
@@ -402,10 +403,10 @@ describe("the countdown duration is choosable (STC-391, from hardware)", () => {
     const { dir: recordings } = makeTakeFolder();
     const ud = mkdtempSync(join(tmpdir(), "stc-ud-"));
     const open = async () => {
-      app = await electron.launch({
+      app = await launchIsolated({
         args: [root, `--user-data-dir=${ud}`],
         cwd: root,
-        env: { ...process.env, STC_RECORDINGS_DIR: recordings,
+        env: { STC_RECORDINGS_DIR: recordings,
                STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
                STC_HELPER_BIN: FAKE_HELPER },
       });
