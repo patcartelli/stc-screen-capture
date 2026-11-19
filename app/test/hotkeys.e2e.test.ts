@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,11 +46,11 @@ async function launch(o: { userData?: string; recordings?: string; stillLog?: st
   const recordings = o.recordings ?? makeTakeFolder().dir;
   const userData = o.userData ?? mkdtempSync(join(tmpdir(), "stc-ud-"));
   const stillLog = o.stillLog ?? join(mkdtempSync(join(tmpdir(), "stc-still-log-")), "requests.jsonl");
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
-      ...process.env,
+      
       STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
       STC_FAKE_STILL_LOG: stillLog,
       // A CI runner has no audio device and a developer machine does not want

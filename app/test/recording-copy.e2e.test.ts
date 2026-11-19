@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync, cpSync, truncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,10 +59,10 @@ async function launch(env: Record<string, string> = {}): Promise<Launched> {
   const userData = mkdtempSync(join(tmpdir(), "stc-ud-"));
   const copyLog = join(mkdtempSync(join(tmpdir(), "stc-log-")), "copy.log");
   writeFileSync(join(userData, "settings.json"), JSON.stringify({ saveFolder: null }));
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${userData}`], cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp,
+      STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: temp,
       STC_COPIES_DIR: copies, STC_FAKE_COPY_LOG: copyLog,
       // Long enough to see a render in progress (copy-render.ts's seam).
       STC_COPY_RENDER_DELAY_MS: "3000",

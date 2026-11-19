@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,10 +44,10 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<Launched> 
   const ud = mkdtempSync(join(tmpdir(), "stc-ud-"));
   const startLog = join(mkdtempSync(join(tmpdir(), "stc-logs-")), "start.jsonl");
   const tempTakes = mkdtempSync(join(tmpdir(), "stc-temp-"));
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${ud}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes,
+    env: { STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: tempTakes,
            STC_HELPER_BIN: FAKE_HELPER, STC_FAKE_START_LOG: startLog,
            STC_OVERLAY_SYNTHETIC_INPUT: "1", ...extraEnv },
   });

@@ -1,4 +1,5 @@
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,10 +34,10 @@ export async function launchApp(dir: string, env: Record<string, string> = {},
       saveFolder: null,
     }));
   }
-  const app = await electron.launch({
+  const app = await launchIsolated({
     args: [root, `--user-data-dir=${userData}`], cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: dir,
+      STC_RECORDINGS_DIR: dir,
       // Isolated the same way the library root is (STC-393): without this,
       // the app falls back to the REAL Application Support temp folder, and
       // a launch-time crash-recovery prompt over real leftover content would

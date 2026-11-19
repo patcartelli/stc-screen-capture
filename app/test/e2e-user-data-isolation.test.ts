@@ -1,49 +1,46 @@
 import { describe, test, expect } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { ROOT_ENV, isUnderTmp } from "./_launch.js";
 
 /**
- * STC-403's guard: every E2E fixture that launches the real app must be
- * isolated from the developer's real `~/Library/Application Support/Capture`.
+ * Every e2e app is isolated from the machine it runs on (STC-403, STC-658).
  *
- * `_editor-fixture.ts`'s `launchApp` used to omit `--user-data-dir`, so the
- * app under test loaded the DEVELOPER's real `settings.json` — on a machine
- * with a save folder set, every editor E2E wrote real PNGs to the real
- * Desktop and then failed asserting on a file that had landed somewhere else
- * entirely. It passed precisely where nobody was looking (a fresh CI profile
- * has no `saveFolder`, STC-412's field — `still.destination` at the time this
- * was written) and failed only on a real developer machine.
+ * STC-403: `_editor-fixture.ts` launched the app without `--user-data-dir`, so
+ * every editor e2e read the developer's real `settings.json` and wrote PNGs to
+ * their real Desktop. It passed on CI (a fresh profile has no save folder) and
+ * failed only where someone was looking. This file's first version checked
+ * that every `electron.launch(` carried the flag.
  *
- * Building this guard found the SAME defect in four more files nothing had
- * flagged yet (`manage.e2e.test.ts`, `missing-helper.e2e.test.ts`,
- * `take-library.e2e.test.ts`, `shell.e2e.test.ts`, `export-identity.slow.
- * test.ts`) — the ticket's diagnosis was scoped to the one file whose litter
- * was actually noticed, but the defect is "an app-launching fixture forgot
- * the flag", which is a property of the CALL SITE, not of any one file. All
- * five are fixed alongside this guard.
+ * STC-658: that check was right about the flag and blind to everything else.
+ * The 2026-11-13 review found 44 launchers leaving the copies folder on its
+ * real default (`purgeCopies` deletes from it 60 s after launch), every Delete
+ * going to the real Trash, and copies landing on the real clipboard. Each
+ * launcher carried its own list of roots, short by a different one each time.
  *
- * No behavioural test can make this claim: a fixture that forgets the flag
- * still starts the app, the app still comes up, and most assertions still
- * pass — right up until the one that reads a directory the real settings
- * silently redirected. So it is checked STRUCTURALLY, in the idiom this repo
- * already uses for rules about shape rather than output: `library-seam.
- * test.ts` on the library's adapter, `spaces-seam.test.ts` on the event
- * space, `gate-bounds.test.ts` refusing a bare `browser.close()`.
+ * So now there is ONE launcher, `_launch.ts`'s `launchIsolated`, and this file
+ * holds three rules about it:
+ *
+ * 1. No file in `app/test/` calls `electron.launch(` except `_launch.ts`.
+ * 2. Every `STC_*_DIR` that `app/src/` reads is one of the launcher's roots,
+ *    so a new folder the app writes to cannot be added without the launcher
+ *    isolating it.
+ * 3. A root a test passes must be under the system temp directory
+ *    (`isUnderTmp`, which the launcher applies before starting the app).
+ *
+ * No behavioural test can make these claims: an app pointed at a real folder
+ * still starts, and most assertions still pass. So they are checked
+ * STRUCTURALLY, the way `library-seam.test.ts` and `spaces-seam.test.ts`
+ * check theirs, each with a control proving it can fail.
  */
 
 const repo = join(__dirname, "..", "..");
 const TEST_DIR = join(repo, "app", "test");
-
-/**
- * How far past `electron.launch(` the flag is allowed to live.
- *
- * Every real call site in this repo puts it in the same `args` array as
- * `electron.launch(` itself, one line below at most (measured directly, not
- * assumed: every existing correct call site clears this by a wide margin).
- * A generous window rather than a tight one, because the guard's job is to
- * catch an OMITTED flag, not to police formatting.
- */
-const WINDOW_LINES = 8;
+const SRC_DIR = join(repo, "app", "src");
+const LAUNCHER = "_launch.ts";
+/** This file's own fixture strings are examples of the pattern, not launches. */
+const SELF = "e2e-user-data-isolation.test.ts";
 
 /** Comments blanked before scanning, keeping line numbers — library-seam.test.ts's own move. */
 function stripComments(src: string): string {
@@ -52,82 +49,78 @@ function stripComments(src: string): string {
     .replace(/\/\/[^\n]*/g, "");
 }
 
-/** Line-by-line so a failure names the line, not just the file. */
-function unisolatedLaunches(src: string): string[] {
-  const lines = stripComments(src).split("\n");
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i]!.includes("electron.launch(")) continue;
-    const window = lines.slice(i, i + WINDOW_LINES).join("\n");
-    if (!window.includes("--user-data-dir")) {
-      out.push(`${i + 1}: electron.launch() with no --user-data-dir within ${WINDOW_LINES} lines`);
-    }
-  }
-  return out;
+/** Rule 1: line numbers of every `electron.launch(` in code. */
+function directLaunches(src: string): number[] {
+  return stripComments(src).split("\n").flatMap((l, i) => (l.includes("electron.launch(") ? [i + 1] : []));
 }
 
-/**
- * This guard's own fixture strings below are examples of the pattern, not
- * real launches, and are not comments — `stripComments` cannot tell them
- * apart from code. Excluded by name rather than relying on that.
- */
-const SELF = "e2e-user-data-isolation.test.ts";
+/** Rule 2: every `STC_*_DIR` named in code. */
+function rootsRead(src: string): string[] {
+  return [...new Set(stripComments(src).match(/\bSTC_[A-Z_]+_DIR\b/g) ?? [])];
+}
 
-describe("every E2E fixture that launches the app is isolated from real user data (STC-403)", () => {
-  const files = readdirSync(TEST_DIR).filter((f) => f.endsWith(".ts") && f !== SELF);
+describe("every e2e app goes through the one isolating launcher (STC-658)", () => {
+  const files = readdirSync(TEST_DIR).filter((f) => f.endsWith(".ts") && f !== SELF && f !== LAUNCHER);
 
   for (const f of files) {
-    test(`${f} does not launch electron without --user-data-dir`, () => {
-      const src = readFileSync(join(TEST_DIR, f), "utf8");
-      const found = unisolatedLaunches(src);
-      expect(found, `app/test/${f} launches the app without isolating it from the ` +
-        `developer's real settings:\n${found.join("\n")}`).toEqual([]);
+    test(`${f} does not call electron.launch( itself`, () => {
+      const found = directLaunches(readFileSync(join(TEST_DIR, f), "utf8"));
+      expect(found, `app/test/${f} launches the app directly at line(s) ${found.join(", ")}; ` +
+        "use launchIsolated from ./_launch.js, which isolates every root").toEqual([]);
     });
   }
 
-  /**
-   * The guard must be able to FAIL, which is a separate claim from it
-   * passing — this repo has paid for the difference more than once (a bound
-   * nobody watched fire, a floor with enough slack to hide a missing term).
-   */
-  test("the pattern catches a launch call with no --user-data-dir at all", () => {
-    const missing = `
-      app = await electron.launch({
-        args: [root], cwd: root,
-        env: { ...process.env, STC_RECORDINGS_DIR: dir },
-      });
-    `;
-    expect(unisolatedLaunches(missing)).not.toEqual([]);
+  test("the launcher itself is the one call, and adds a user-data dir", () => {
+    const src = stripComments(readFileSync(join(TEST_DIR, LAUNCHER), "utf8"));
+    expect(directLaunches(src)).toHaveLength(1);
+    expect(src).toContain("--user-data-dir=");
+    expect(src).toContain("STC_PASTEBOARD");
   });
 
-  test("the pattern catches a launch call whose flag is too far away to be the same site", () => {
-    const farAway = [
-      "app = await electron.launch({",
-      "  args: [root], cwd: root,",
-      ...Array.from({ length: WINDOW_LINES }, () => "  // padding so the flag below is out of the window"),
-      "  // --user-data-dir lives somewhere else entirely and is not this call's",
-      "});",
-    ].join("\n");
-    expect(unisolatedLaunches(farAway)).not.toEqual([]);
+  test("the pattern catches a direct launch", () => {
+    expect(directLaunches(`app = await electron.launch({ args: [root] });`)).toEqual([1]);
   });
 
-  /** And it must not fire on a properly isolated call. A guard that cries wolf gets turned off. */
-  test("the pattern leaves an isolated launch call alone", () => {
-    const isolated = `
-      app = await electron.launch({
-        args: [root, \`--user-data-dir=\${mkdtempSync(join(tmpdir(), "stc-ud-"))}\`], cwd: root,
-        env: { ...process.env, STC_RECORDINGS_DIR: dir },
-      });
-    `;
-    expect(unisolatedLaunches(isolated)).toEqual([]);
-  });
-
-  /** A file may discuss the rule it keeps — this file's own header does. */
   test("the pattern ignores a comment discussing electron.launch(", () => {
-    const discussing = `
-      // electron.launch( with no --user-data-dir is the bug this guard exists to catch
-      const x = 1;
-    `;
-    expect(unisolatedLaunches(discussing)).toEqual([]);
+    expect(directLaunches(`// electron.launch( is what the launcher wraps\nconst x = 1;`)).toEqual([]);
+  });
+});
+
+describe("every folder the app writes to is a launcher root (STC-658)", () => {
+  test("app/src reads no STC_*_DIR the launcher does not set", () => {
+    const read = new Set<string>();
+    for (const f of readdirSync(SRC_DIR).filter((f) => f.endsWith(".ts"))) {
+      for (const r of rootsRead(readFileSync(join(SRC_DIR, f), "utf8"))) read.add(r);
+    }
+    const missing = [...read].filter((r) => !(ROOT_ENV as readonly string[]).includes(r)).sort();
+    expect(missing, "app/src reads these folders from the environment, and _launch.ts's ROOT_ENV " +
+      "does not set them, so every e2e app falls back to the real one").toEqual([]);
+    // And the scan saw the roots it should: a scan that finds nothing passes the line above.
+    expect([...read].sort()).toEqual(expect.arrayContaining(["STC_COPIES_DIR", "STC_RECORDINGS_DIR", "STC_TEMP_TAKES_DIR", "STC_TRASH_DIR"]));
+  });
+
+  test("the pattern catches a new root in code, and not one in a comment", () => {
+    expect(rootsRead(`return env.STC_EXPORTS_DIR || join(home, "x");`)).toEqual(["STC_EXPORTS_DIR"]);
+    expect(rootsRead(`// STC_EXPORTS_DIR is discussed, not read`)).toEqual([]);
+  });
+});
+
+describe("a root a test passes must be a temp folder (STC-658)", () => {
+  test("a fresh temp folder, and one not made yet inside it, are accepted", () => {
+    const t = mkdtempSync(join(tmpdir(), "stc-iso-"));
+    expect(isUnderTmp(t)).toBe(true);
+    expect(isUnderTmp(join(t, "not-yet", "deeper"))).toBe(true);
+  });
+
+  test("the real home, the temp directory itself, a relative path and '' are refused", () => {
+    expect(isUnderTmp(homedir())).toBe(false);
+    expect(isUnderTmp(join(homedir(), "Library", "Application Support", "Capture", "copies"))).toBe(false);
+    expect(isUnderTmp(tmpdir())).toBe(false);
+    expect(isUnderTmp("recordings")).toBe(false);
+    expect(isUnderTmp("")).toBe(false);
+  });
+
+  test("a path that only climbs out of the temp directory is refused", () => {
+    expect(isUnderTmp(join(tmpdir(), "..", "..", "Users"))).toBe(false);
   });
 });

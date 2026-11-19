@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,11 +36,11 @@ async function launch(settings?: Record<string, unknown>): Promise<ElectronAppli
   // A preference in place before launch, for a test that must not open the
   // library to set one (it would no longer be a take with no window).
   if (settings) writeFileSync(join(userData, "settings.json"), JSON.stringify(settings));
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
-      ...process.env,
+      
       STC_OPEN_LIBRARY_ON_LAUNCH: "",
       STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-rec-")),
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),

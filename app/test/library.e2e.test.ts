@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, mkdirSync, rmSync, chmodSync, existsSync, readdirSync, writeFileSync, statSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,11 +60,11 @@ async function launch(seed: (recordings: string) => void,
   writeFileSync(join(userData, "settings.json"), JSON.stringify({
     saveFolder: null,
   }));
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${userData}`],
     cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
+      STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER,
       STC_FAKE_STILL_LOG: stillLog, STC_NO_SHUTTER: "1", ...extraEnv,
     },
   });
@@ -537,9 +538,9 @@ describe("the library redesign (STC-584)", () => {
     const recordings = mkdtempSync(join(tmpdir(), "stc-libe2e-"));
     mixed(recordings);
     const open = async () => {
-      app = await electron.launch({
+      app = await launchIsolated({
         args: [root, `--user-data-dir=${userData}`], cwd: root,
-        env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
+        env: { STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
                STC_HELPER_BIN: FAKE_HELPER },
       });
       const w = await app.firstWindow();

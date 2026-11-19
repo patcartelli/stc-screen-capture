@@ -300,7 +300,7 @@ enum StillExport {
             return .failure(.clipboardFailed("the pasteboard accepted none of the representations"))
         }
 
-        let pb = NSPasteboard.general
+        let pb = Pasteboard.current
         pb.clearContents()
         guard pb.writeObjects([item]) else {
             return .failure(.clipboardFailed("NSPasteboard refused the item"))

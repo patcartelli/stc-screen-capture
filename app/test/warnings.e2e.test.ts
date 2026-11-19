@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication } from "playwright";
+import { type ElectronApplication } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,10 +39,10 @@ async function launchReady(env: Record<string, string>) {
   // take would make "is it empty?" unanswerable. Nothing in this file opens a
   // take, so nothing needs one.
   const recordings = mkdtempSync(join(tmpdir(), "stc-takes-"));
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`],
     cwd: root,
-    env: { ...process.env, STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER, STC_OVERLAY_SYNTHETIC_INPUT: "1", ...env },
+    env: { STC_RECORDINGS_DIR: recordings, STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")), STC_HELPER_BIN: FAKE_HELPER, STC_OVERLAY_SYNTHETIC_INPUT: "1", ...env },
   });
   // A stopped take leaves a fresh panel now (STC-487), so a quit raises the
   // "unsaved takes" warning (STC-392 D8). Unstubbed it is a real modal and

@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "vitest";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { type ElectronApplication, type Page } from "playwright";
+import { launchIsolated } from "./_launch.js";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,10 +35,10 @@ async function launch(): Promise<Launched> {
   const copyLog = join(mkdtempSync(join(tmpdir(), "stc-log-")), "copy.log");
   // Small and slow-rate, so the conversion is quick on a CI runner.
   writeFileSync(join(userData, "settings.json"), JSON.stringify({ gif: { fps: 10, maxWidth: 480 } }));
-  app = await electron.launch({
+  app = await launchIsolated({
     args: [root, `--user-data-dir=${userData}`], cwd: root,
     env: {
-      ...process.env, STC_RECORDINGS_DIR: recordings,
+      STC_RECORDINGS_DIR: recordings,
       STC_TEMP_TAKES_DIR: mkdtempSync(join(tmpdir(), "stc-temp-")),
       STC_COPIES_DIR: copies, STC_FAKE_COPY_LOG: copyLog,
       STC_HELPER_BIN: FAKE_HELPER, STC_NO_SHUTTER: "1",
