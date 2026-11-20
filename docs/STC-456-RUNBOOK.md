@@ -12,7 +12,7 @@ npm run app:start
 ## What shipped
 
 The overlay's options bar is a two-row 340×108 dark pane (`#0f0f0f`, radius
-16) plus a separate 340×36 "Capture Video" button 8px below it
+16) plus a separate 340×36 "Record" button 8px below it
 (`app/src/record-options.ts`'s `PANE_WIDTH`/`PANE_HEIGHT`/`CAPTURE_GAP`/
 `CAPTURE_HEIGHT`). Row 1 is the size field (editable W/H, JetBrains Mono) and
 Expand/Crop; row 2 is Settings, Mic, Camera, Keys, Clicks — Keys and Clicks
@@ -44,8 +44,7 @@ focused, typed size commits BEFORE any other press acts, and with a menu
 open, a press on any control other than the mic/camera triggers only closes
 the menu. Return in the size field commits the size; Return in the options
 phase re-confirms the selection and does **not** start the take — the ↵ glyph
-on the Capture Video button is decorative, and the legend says "Click Capture
-Video" rather than promising Return starts it.
+on the Record button is decorative, and the legend says "Click Record" rather than promising Return starts it.
 
 None of this has been exercised with real mouse/keyboard input — the e2e
 suite drives the overlay with `STC_OVERLAY_SYNTHETIC_INPUT=1`, which bypasses
@@ -56,7 +55,7 @@ that gap.
 
 1. **The bar against Frame 9, side by side.** Pane 340×108, radius 16,
    `#0f0f0f`, JetBrains Mono for the size digits, Geist for everything else
-   on the pane and the Capture Video label. Screenshot in both OS
+   on the pane and the Record label. Screenshot in both OS
    appearances (System Settings → Appearance) — the pane must be dark in
    **both**, since it forces dark regardless of the OS theme (unlike the
    main window's popover, check 9).
@@ -77,7 +76,7 @@ that gap.
    `writeBarOptions` used to write the file but never tell an already-open
    main window, so its labels stayed stale until something else refreshed
    them).
-6. **Mic menu.** Drops below its trigger and over Capture Video; flips above
+6. **Mic menu.** Drops below its trigger and over Record; flips above
    the trigger whenever the trigger's bottom + gap + the menu's own height
    would cross the display's bottom margin — NOT only when the bar sits at
    the bottom of the display: a bar in its ordinary `below` placement can
@@ -109,13 +108,13 @@ never drives these paths for real. All of them were sanity-checked once with
 a scratch Playwright-CDP script during Task 6 (not committed — see the task
 report) but need a proper hand pass:
 
-11. **Type a width, then click Capture Video immediately.** The take is
+11. **Type a width, then click Record immediately.** The take is
     recorded at the TYPED size, not the drag's original size — open the
     exported file and check its dimensions.
 12. **Type W, Tab to H, move the mouse around, then leave the pair.** W
     keeps what was typed — it must not get overwritten by a broadcast while
     H still has focus.
-13. **With a menu open, click Capture Video's exposed edge beside the
+13. **With a menu open, click Record's exposed edge beside the
     menu** (the part of the button not covered by the dropdown). The menu
     closes and no take starts.
 14. **Click into the size field.** Its text is selected (Chromium can undo
