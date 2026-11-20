@@ -7,7 +7,7 @@
  *
  * Return is deliberately absent from the options phase: there it re-confirms
  * the selection (selection.ts `confirm` -> nextPhase "options"), it does not
- * start the take. The arrow on the Capture Video button is decorative
+ * start the take. The arrow on the Record button is decorative
  * (STC-456), so the legend says Click.
  */
 
@@ -22,7 +22,7 @@ export function legendItems(mode: string, phase: "select" | "options" | undefine
   if (phase === "options") {
     return [
       { keys: [], label: "Adjust selection" },
-      { keys: ["Click"], label: "Capture Video" },
+      { keys: ["Click"], label: "Record" },
       { keys: ["Esc"], label: "cancel" },
     ];
   }

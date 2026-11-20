@@ -22,7 +22,7 @@ describe("legend (STC-598)", () => {
   test("options phase says Click, never Return: Return only re-confirms the selection", () => {
     for (const mode of ["window", "region"]) {
       const text = words(mode, "options");
-      expect(text).toEqual(["Adjust selection", "Click Capture Video", "Esc cancel"]);
+      expect(text).toEqual(["Adjust selection", "Click Record", "Esc cancel"]);
       expect(text.join(" ")).not.toMatch(/return|↵/i);
     }
   });

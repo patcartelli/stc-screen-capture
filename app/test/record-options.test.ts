@@ -243,7 +243,7 @@ describe("a press in the options phase (STC-456 fix round 1)", () => {
     inBar: false, enabled: true, ...over,
   });
 
-  test("a typed size is committed BEFORE Capture Video, not after it", () => {
+  test("a typed size is committed BEFORE Record, not after it", () => {
     // The browser blurs the field only after pointerdown; if `control:record`
     // went first the take started at the old size and the late `size` was dropped.
     expect(press({ fieldFocused: true, hit: "record", inBar: true }).actions)

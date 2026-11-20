@@ -228,7 +228,7 @@ export interface BarPress {
  *
  * 1. A typed size is committed FIRST. The browser only moves focus (and fires
  *    the blur that would commit it) after pointerdown has run, so without this
- *    a press on Capture Video sent `control:record` before `size` and the take
+ *    a press on Record sent `control:record` before `size` and the take
  *    started at the old size. The session handles IPC in order, so committing
  *    here puts `size` ahead of whatever follows.
  * 2. With a menu open, a press only closes it — the capture button's edges

@@ -3907,6 +3907,10 @@ ipcMain.handle("still:dragFile", async (_e, req: {
  */
 ipcMain.on("still:startDrag", (e, file: string) => {
   if (typeof file !== "string" || !existsSync(file)) return;
+  // STC-665: the siblings check the capture root; a renderer must not be able
+  // to start a drag of an arbitrary file.
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (!insideCaptureRoot(process.env, saveFolder, file)) return;
   // macOS refuses an empty drag icon. Built from the file being dragged, so
   // what the cursor carries is what will land.
   const icon = nativeImage.createFromPath(file).resize({ width: 128 });
@@ -4611,6 +4615,9 @@ ipcMain.handle("preview:size", async (e, name: string) => {
  * that peak, not the transfer (835 ms, fast), is what limits how long a take
  * can be. Slices land directly in a destination the renderer allocated once.
  */
+/** Ceiling on one `preview:chunk` read — far above a 4K keyframe group. */
+const PREVIEW_CHUNK_MAX_BYTES = 256 * 1024 * 1024;
+
 ipcMain.handle("preview:chunk", async (e, name: string, offset: number, length: number) => {
   const openTake = getOpenTake(e);
   if (!openTake) throw new Error("no take is open");
@@ -4618,6 +4625,9 @@ ipcMain.handle("preview:chunk", async (e, name: string, offset: number, length: 
   if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(length) || length <= 0) {
     throw new Error("bad chunk range");
   }
+  // STC-665: a chunk is one keyframe group; refuse a length that would make
+  // Buffer.allocUnsafe a memory bomb.
+  if (length > PREVIEW_CHUNK_MAX_BYTES) throw new Error("chunk too large");
   const fh = await open(join(openTake, name), "r");
   try {
     const buf = Buffer.allocUnsafe(length);
