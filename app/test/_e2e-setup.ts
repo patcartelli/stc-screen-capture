@@ -24,6 +24,12 @@ import {
 process.env.STC_ASSUME_PERMISSIONS ??= "granted";
 
 /**
+ * STC-682: an e2e app must not take the developer's real global shortcuts.
+ * `hotkeys.e2e.test.ts` sets it to "" because registration is what it tests.
+ */
+process.env.STC_NO_GLOBAL_SHORTCUTS ??= "1";
+
+/**
  * STC-502: launch shows no window, but nearly every e2e file drives the
  * library's page through `firstWindow()`. `launch-no-window.e2e.test.ts`
  * sets it to "" to see the real launch.

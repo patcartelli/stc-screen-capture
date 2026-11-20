@@ -56,6 +56,8 @@ async function launch(o: { userData?: string; recordings?: string; stillLog?: st
       // A CI runner has no audio device and a developer machine does not want
       // a shutter per assertion. The path itself is covered by shutter.test.ts.
       STC_NO_SHUTTER: "1",
+      // STC-682: this file tests real registration, so it opts out of the suite default.
+      STC_NO_GLOBAL_SHORTCUTS: "",
     },
   });
   await stubQuitDialog(app);
