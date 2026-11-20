@@ -130,14 +130,15 @@ describe("selectedOption and isCaptureSize", () => {
 });
 
 describe("isValidOutputSize and parseProject (STC-665)", () => {
-  test("refuses zero, negative, odd and wrong-aspect sizes; accepts derived ones and the capture itself", async () => {
+  test("refuses zero, negative and odd sizes; accepts derived ones, other shapes and the capture itself", async () => {
     const { isValidOutputSize } = await import("../src/output-size.js");
     const c = cap(1920, 1080);
     expect(isValidOutputSize(c, cap(1280, 720))).toBe(true);
     expect(isValidOutputSize(c, outputSizeFor(c, 1232))).toBe(true);
     expect(isValidOutputSize(c, c)).toBe(true);
+    expect(isValidOutputSize(c, cap(1232, 770))).toBe(true); // another shape is legitimate
     expect(isValidOutputSize(cap(1001, 563), cap(1001, 563))).toBe(true); // odd capture, verbatim
-    for (const bad of [cap(0, 0), cap(-1280, -720), cap(1281, 721), cap(1280, 1280), cap(1280.5, 720)]) {
+    for (const bad of [cap(0, 0), cap(-1280, -720), cap(1281, 721), cap(1280.5, 720)]) {
       expect(isValidOutputSize(c, bad), JSON.stringify(bad)).toBe(false);
     }
   });

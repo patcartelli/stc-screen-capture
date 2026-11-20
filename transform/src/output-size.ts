@@ -82,15 +82,16 @@ export function outputSizeFor(capture: Size, targetWidth: number): Size {
  * `parseProject` reads a hand-editable file, and a width of 0, a negative, an
  * odd height or a different aspect all reached the encoder unchecked. The
  * capture's own size always passes (see `outputOptions`: an odd capture is
- * offered verbatim); anything else must be positive, even, and within a pixel
- * of the height `outputSizeFor` derives, which is the aspect rule.
+ * offered verbatim); anything else must be positive and even. The aspect is NOT
+ * checked: a take whose output is not the capture's shape is legitimate
+ * (STC-337, a region or window take) and `outputSizeFor` only derives defaults.
  */
 export function isValidOutputSize(capture: Size, output: Size): boolean {
   const { width, height } = output;
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return false;
   if (isCaptureSize(capture, output)) return true;
   if (width % 2 !== 0 || height % 2 !== 0) return false;
-  return Math.abs(height - outputSizeFor(capture, width).height) <= 2;
+  return true;
 }
 
 /** Is this output the capture's own size — the default, and no rescale at all? */
