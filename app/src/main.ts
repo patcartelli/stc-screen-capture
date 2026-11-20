@@ -2798,6 +2798,14 @@ ipcMain.handle("still:capture", async (_e, action?: ShotAction) => {
 function applyShortcuts(next: Shortcuts): ShortcutReport[] {
   shortcuts = next;
   globalShortcut.unregisterAll();
+  // STC-682: the e2e suite launches many apps on a developer's machine, and each
+  // would otherwise take the REAL global shortcuts (⇧⌘4 and friends) from
+  // whatever the developer is using. With the seam set nothing is registered
+  // with the OS; the report says what a free machine would have said.
+  // `hotkeys.e2e.test.ts` is the one file that needs the real thing and clears it.
+  const skipOsRegistration = process.env.STC_NO_GLOBAL_SHORTCUTS === "1";
+  const register = (accelerator: string, cb: () => void): boolean =>
+    skipOsRegistration ? true : globalShortcut.register(accelerator, cb);
   const plans = planShortcuts(next);
   shortcutReport = plans.map((plan): ShortcutReport => {
     if (plan.problem !== undefined || plan.accelerator == null) {
@@ -2805,7 +2813,7 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     }
     let ok = false;
     try {
-      ok = globalShortcut.register(plan.accelerator, () => {
+      ok = register(plan.accelerator, () => {
         if (plan.action === "record") return void onRecordHotkey();
         if (plan.action === "pick-color") return void pickColorAndAnnounce();
         if (plan.action === "capture-text") return void captureTextAndAnnounce();
@@ -2828,7 +2836,7 @@ function applyShortcuts(next: Shortcuts): ShortcutReport[] {
     }
     let ok = false;
     try {
-      ok = globalShortcut.register(v.accelerator, () => void captureAndAnnounce(v.action, "hotkey", v.outcome));
+      ok = register(v.accelerator, () => void captureAndAnnounce(v.action, "hotkey", v.outcome));
     } catch { ok = false; }
     if (!ok) console.warn(`[shortcuts] ${v.accelerator} (${v.action} → ${v.outcome}) is unavailable`);
     return ok ? { ...v, registered: true } : { ...v, problem: "unavailable", registered: false };
