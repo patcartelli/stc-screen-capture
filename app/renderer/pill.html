@@ -47,7 +47,7 @@
       background: #ff3b30; animation: pill-live-pulse 1.4s ease-in-out infinite;
     }
     @keyframes pill-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-    @media (prefers-reduced-motion: reduce) { #pill-dot { animation: none; } #pill-meter.live #pill-meter-bar { transition: none; } }
+    @media (prefers-reduced-motion: reduce) { #pill-dot { animation: none; } }
     #pill-timer { flex: none; font-variant-numeric: tabular-nums; }
     /* The level meter (STC-528; pill.ts's meterView decides, this draws).
        Hatched until the helper has sent a reading: no mic, or one lost. A
@@ -70,6 +70,9 @@
       width: calc(var(--level, 0) * 100%); background: #f5f5f5;
       transition: width 60ms linear;
     }
+    /* After the rule above, not with the pulse's: equal specificity, so the
+       later one wins, and a reduced-motion rule written first changed nothing. */
+    @media (prefers-reduced-motion: reduce) { #pill-meter.live #pill-meter-bar { transition: none; } }
     #pill-meter.no-signal { background: linear-gradient(#636366, #636366) left 50% / 13px 1px no-repeat; }
     #pill-meter.no-signal #pill-meter-dot {
       display: block; right: 0; top: 2px; width: 4px; height: 4px; border-radius: 50%;
