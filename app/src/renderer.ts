@@ -105,6 +105,8 @@ declare const recorder: {
   gifBytes(file: string): Promise<Uint8Array<ArrayBuffer>>;
   /** STC-592: a saved GIF's Share — the file itself on the pasteboard. */
   copyFile(file: string): Promise<{ ok: boolean; detail?: string }>;
+  /** STC-671: have the helper write a recording's poster.jpg into its folder. Rejects on failure. */
+  makePoster(dir: string): Promise<void>;
   /** STC-584: a still's Share copies its image through the panel's own funnel. */
   exportStill(req: Record<string, unknown>): Promise<{ ok: boolean; code?: string; detail?: string }>;
   on(event: string, cb: (p: any) => void): () => void;
@@ -124,7 +126,7 @@ import {
 } from "./library-view.js";
 import {
   placeholderFor, searchPlaceholder, applySearch, countLabel, LOADING_PLACEHOLDER, FAILED_PLACEHOLDER, UPDATING_NOTE,
-  UPDATING_SHOW_AFTER_MS,
+  UPDATING_SHOW_AFTER_MS, POSTER_FILE,
   type LibraryItem, type LibraryList, type PlaceholderAction, type PlaceholderContext,
 } from "./library-items.js";
 import { STOP_ANNOUNCING_WARNINGS, TRACK_LOSS_WARNINGS, TRACK_STALL_WARNINGS } from "./stop-copy.js";
@@ -569,7 +571,20 @@ async function showCachedThumbnail(item: LibraryItem, img: HTMLImageElement,
   const dir = item.dir;
   if (!dir) throw new Error("a cached thumbnail lives inside a bundle directory");
   const bytes = await recorder.getFrame(dir, file);
-  img.src = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+  img.src = URL.createObjectURL(new Blob([bytes], { type: file.endsWith(".jpg") ? "image/jpeg" : "image/png" }));
+}
+
+/** Posters already asked for this session, so a take whose make failed is not retried per redraw. */
+const posterAsked = new Map<string, Promise<void>>();
+
+/** A recording with no poster yet (STC-671): ask once, then read it like any cached picture. */
+async function showPoster(item: LibraryItem, img: HTMLImageElement): Promise<void> {
+  const dir = item.dir;
+  if (!dir) throw new Error("a recording's poster lives inside its bundle directory");
+  let asked = posterAsked.get(dir);
+  if (!asked) { asked = recorder.makePoster(dir); posterAsked.set(dir, asked); }
+  await asked;
+  await showCachedThumbnail(item, img, POSTER_FILE);
 }
 
 const libraryCallbacks: LibraryCallbacks = {
@@ -675,6 +690,8 @@ const libraryCallbacks: LibraryCallbacks = {
       await showCachedThumbnail(item, img, item.thumbnail.file);
     } else if (item.thumbnail.source === "render") {
       await renderThumbnail(item, img);
+    } else if (item.thumbnail.source === "poster") {
+      await showPoster(item, img);
     } else if (item.thumbnail.source === "animated") {
       await showAnimatedThumbnail(item, img);
     }

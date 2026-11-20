@@ -9,7 +9,7 @@ import { readBundleId } from "./capture-identity.js";
 import { probeGif } from "@transform/gif-probe.js";
 import {
   recordingItem, stillItem, looseFileItem, gifItem, applyFilter, LIBRARY_FILTERS, DEFAULT_LIBRARY_FILTER,
-  THUMBNAIL_FILE, SUPPORTED_ANCHORS_VERSIONS, recordingDurationMs,
+  THUMBNAIL_FILE, POSTER_FILE, SUPPORTED_ANCHORS_VERSIONS, recordingDurationMs,
   type FinishedFileInfo, type GifInfo, type FolderStatus, type InvalidItem, type LibraryList, type StillInfo, type TakeInfo, type TakeList,
 } from "./library-items.js";
 
@@ -877,6 +877,7 @@ async function readRecording(dir: string, name: string, names: string[],
     silentSpans: spansOf(anchors?.mic),
     stalledSpans: spansOf(anchors?.camera, "stalledSpans"),
     bytes: await dirSize(dir, names),
+    poster: names.includes(POSTER_FILE),
   });
 }
 

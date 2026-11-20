@@ -1,4 +1,5 @@
 import { WALLPAPER_FILE } from "@transform/backgrounds.js";
+import { POSTER_FILE } from "./library-items.js";
 
 /**
  * Which file names `still:frame` reads out of a shot folder for a renderer.
@@ -10,5 +11,5 @@ import { WALLPAPER_FILE } from "@transform/backgrounds.js";
  */
 export function stillFrameNameAllowed(name: string): boolean {
   if (name.includes("..")) return false;
-  return /^[A-Za-z0-9._-]+\.png$/.test(name) || name === WALLPAPER_FILE;
+  return /^[A-Za-z0-9._-]+\.png$/.test(name) || name === WALLPAPER_FILE || name === POSTER_FILE;
 }

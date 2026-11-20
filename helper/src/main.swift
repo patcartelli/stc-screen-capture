@@ -202,6 +202,16 @@ final class App {
                     }
                 }
             }
+        case "make-poster":
+            // STC-671. State-free: a recording's Library picture, one frame as poster.jpg.
+            Poster.run(cmd) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let o): IO.send("poster-made", seq: seq, o)
+                    case .failure(let e): IO.send("error", seq: seq, ["code": "poster-failed", "detail": e.reason])
+                    }
+                }
+            }
         case "copy-file":
             // STC-488. State-free, like export-still: copying a finished
             // render must never be refused because a take happens to be running.
