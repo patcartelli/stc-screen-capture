@@ -191,7 +191,9 @@ describe("the selection overlay", () => {
       catch { return null; }
     };
     await expect.poll(() => readShot()?.kind, { timeout: 15_000 }).toBe("window");
-    expect(readShot()?.window?.id).toBe(4711);
+    // Polled for the same reason: a single read after the poll above can land
+    // inside main's rewrite and see nothing (CI, STC-683's first run).
+    await expect.poll(() => readShot()?.window?.id, { timeout: 15_000 }).toBe(4711);
   }, 120_000);
 
   test("a window with only a corner showing is hovered there and captured whole (STC-625)", async () => {
