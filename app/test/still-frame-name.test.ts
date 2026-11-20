@@ -14,6 +14,12 @@ describe("still:frame's file-name rule", () => {
     expect(stillFrameNameAllowed(WALLPAPER_FILE)).toBe(true);
   });
 
+  test("a recording's poster, by exactly its name (STC-671)", () => {
+    expect(stillFrameNameAllowed("poster.jpg")).toBe(true);
+    expect(stillFrameNameAllowed("Poster.jpg")).toBe(false);
+    expect(stillFrameNameAllowed("../poster.jpg")).toBe(false);
+  });
+
   test("no other jpg, and no other image type", () => {
     expect(stillFrameNameAllowed("frame.jpg")).toBe(false);
     expect(stillFrameNameAllowed("wallpaper.jpeg")).toBe(false);

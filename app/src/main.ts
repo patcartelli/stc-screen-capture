@@ -1031,6 +1031,36 @@ function presentDeferredRecoveredPanels(): void {
 }
 
 /**
+ * Have the helper write `dir`'s `poster.jpg` (STC-671). The frame is chosen from the
+ * take's own anchors; a take with none yet gets frame 0. Returns whether a poster now
+ * exists. Never throws: a recording without a picture is a dark tile, not an error.
+ */
+async function makePosterFor(dir: string): Promise<boolean> {
+  const helper = sup;
+  if (!helper) return false;
+  let durationMs = 0;
+  try {
+    durationMs = recordingDurationMs(JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"))) ?? 0;
+  } catch { /* no anchors yet: frame 0 */ }
+  try {
+    await helper.makePoster(dir, durationMs);
+    return true;
+  } catch (err: any) {
+    console.error("[poster] could not make one for", dir, String(err?.detail ?? err?.message ?? err));
+    return false;
+  }
+}
+
+/** A recording tile asks for its picture (STC-671): older takes have none until first listed. */
+ipcMain.handle("library:makePoster", async (_e, dir: unknown) => {
+  const { saveFolder } = readSettings(app.getPath("userData"));
+  if (typeof dir !== "string" || !insideTakesRoot(process.env, saveFolder, dir)) {
+    throw new Error("refusing a folder outside the recordings folder");
+  }
+  if (!(await makePosterFor(dir))) throw new Error("could not make a poster for this recording");
+});
+
+/**
  * A take ended cleanly (`HelperSupervisor`'s `take-ended`).
  *
  * Quitting does not present: `shutdown()` stops a live take, which fires this
@@ -1057,6 +1087,9 @@ async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
     if (quitting) return;
     if (sup?.state === "recording") { if (r.ok) deferredRecoveredPanels.push(dir); return; }
   }
+  // STC-671: the Library picture, made now so the tile has it the first time it is listed.
+  // Fire and forget: a failure costs the picture only (the tile asks again, lazily).
+  void makePosterFor(dir);
   // STC-579: the pill is for a recording in progress and says nothing after a stop (it
   // is already gone), so the panel goes up at once for every stop, with no wait.
   const helperDecided = typeof reason === "string" && isHelperDecidedStop(reason);

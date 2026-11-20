@@ -131,6 +131,15 @@ export class HelperSupervisor {
   }
 
   /**
+   * Write a recording's Library picture, `poster.jpg`, into its folder (STC-671).
+   * State-free like `exportStill`: legal during a take. `durationMs` picks the frame.
+   */
+  async makePoster(dir: string, durationMs: number): Promise<HelperLine> {
+    if (!this.client) throw new Error("helper is not running");
+    return this.client.request("make-poster", { dir, durationMs });
+  }
+
+  /**
    * Put a finished file on the pasteboard as a file reference (STC-488).
    * State-free, like `exportStill`: a copy must not be refused because a take
    * is running.
