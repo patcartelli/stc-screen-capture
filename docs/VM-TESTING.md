@@ -82,6 +82,15 @@ a take leaves behind.
   immediately records is testing macOS, not Capture.
 - **Gatekeeper is off in `stc-base`** (`spctl --status` → assessments disabled). A VM pass
   is not evidence that a customer's Mac will accept the build.
+- **A Shot's shutter sound raised a Microphone prompt in the VM** (STC-677, 2026-11-13).
+  `shutter.ts` plays it with `/usr/bin/afplay`, and tccd charged `afplay`'s mic access to
+  Capture (`kTCCServiceMicrophone`, nothing recording). Not known whether a real Mac does
+  this: a Tart guest's audio device may be the cause, and the dev Mac already holds the
+  grant. Until someone runs it on a clean real Mac (`tccutil reset Microphone
+  com.studiocartelli.capture`, one Shot, sound on), treat a mic prompt after a Shot in
+  the VM as this, not as the Record flow asking early. **`STC_NO_SHUTTER=1` does NOT
+  help here:** a packaged build scrubs every `STC_*` (STC-657). Untick Settings >
+  Capture > Shutter sound in the guest instead.
 - **Disk is tight** (~60 GB free on the host). Clones are copy-on-write but grow as they
   run. Never leave `stc-run-*` VMs behind.
 - The VM window is 1280×800 (`tart set stc-base --display`). Region/geometry tests see
