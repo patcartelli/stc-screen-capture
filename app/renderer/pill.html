@@ -47,7 +47,7 @@
       background: #ff3b30; animation: pill-live-pulse 1.4s ease-in-out infinite;
     }
     @keyframes pill-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-    @media (prefers-reduced-motion: reduce) { #pill-dot { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { #pill-dot { animation: none; } #pill-meter.live #pill-meter-bar { transition: none; } }
     #pill-timer { flex: none; font-variant-numeric: tabular-nums; }
     /* The level meter (STC-528; pill.ts's meterView decides, this draws).
        Hatched until the helper has sent a reading: no mic, or one lost. A
@@ -84,7 +84,7 @@
        follows hovering the PILL, not just the glyph: the window grows about its centre
        to fit the label, which would slide a glyph-only target out from under the pointer
        and flicker; the pill only ever widens around the pointer, so it stays hovered. */
-    #pill-mic-label { display: none; font: 500 11px/1 -apple-system, system-ui, sans-serif; white-space: nowrap; }
+    #pill-mic-label { display: none; font: 500 11px/1 var(--font-sans); white-space: nowrap; }
     #pill.mic-muted:hover #pill-mic-label { display: inline; }
     #pill.mic-muted #pill-meter { display: none; }
     #pill.mic-muted #pill-mic-off { display: flex; }
@@ -110,7 +110,7 @@
     #pill.notice #pill-timer, #pill.notice #pill-meter, #pill.notice #pill-mic-off { display: none; }
     #pill.notice #pill-label {
       display: block; flex: 1 1 auto; min-width: 0; text-align: center;
-      font: 500 11px/1 -apple-system, system-ui, sans-serif;
+      font: 500 11px/1 var(--font-sans);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
   </style>

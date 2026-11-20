@@ -825,13 +825,13 @@ export function placeholderFor(list: LibraryList, ctx: PlaceholderContext): Libr
     return { state: "filtered", title: "Nothing of this kind yet", body: "Choose All to see everything.", actions: [] };
   }
   const keys = [
-    ctx.shotKey ? `${ctx.shotKey} takes a screenshot` : null,
+    ctx.shotKey ? `${ctx.shotKey} takes a shot` : null,
     ctx.recordKey ? `${ctx.recordKey} starts a recording` : null,
   ].filter((k): k is string => k !== null);
   return {
     state: "empty", title: "No captures yet",
-    body: `Screenshots and recordings you make are saved to this folder, a plain folder you can also open in Finder.${
-      keys.length ? ` ${keys.join(", ")}.` : " Use Record or Shot to make the first one."}`,
+    body: `Shots and recordings you make are saved to this folder, a plain folder you can also open in Finder.${
+      keys.length ? ` ${keys.join(", ")}.` : " Make a shot or a recording from the menu bar."}`,
     path: ctx.folder, actions: [],
   };
 }

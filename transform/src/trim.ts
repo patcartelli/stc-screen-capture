@@ -10,6 +10,7 @@ import { isProjectVersion } from "./project-version.js";
 import { TRANSFORM_VERSION } from "./transform-version.js";
 import { DEFAULT_PIP_FIXED, cleanPipStyle } from "./pip-style.js";
 import { cleanFraming } from "./framing.js";
+import { isValidOutputSize } from "./output-size.js";
 import { exportFrameTimeNs } from "./time.js";
 
 const NS_PER_S = 1_000_000_000;
@@ -171,8 +172,12 @@ export function parseProject(
   // replace it with a default.
   if (!isProjectVersion(doc.version)) return fallback;
 
-  const outW = Number.isInteger(doc.output?.width) ? doc.output.width : width;
-  const outH = Number.isInteger(doc.output?.height) ? doc.output.height : height;
+  // STC-665: output-size.ts owns what a size may be; a document that breaks it
+  // exports at the capture's own size rather than reaching the encoder.
+  const wanted = { width: doc.output?.width, height: doc.output?.height };
+  const sizeOk = isValidOutputSize({ width, height }, wanted);
+  const outW = sizeOk ? wanted.width : width;
+  const outH = sizeOk ? wanted.height : height;
   const scale = typeof doc.cursor?.scale === "number" && doc.cursor.scale > 0 ? doc.cursor.scale : 1;
   // Anything but the one other style the schema names is the default pointer:
   // an older document, or a hand edit that misspelt it, must still render.

@@ -242,7 +242,7 @@
                      background: rgba(255, 255, 255, .06); }
     #sectionswitch button { flex: 1 1 0; border: 0; background: transparent; padding: 6px 4px;
                             border-radius: 8px; color: var(--text-dim); cursor: pointer;
-                            font: 400 12px/17px "Geist Mono", ui-monospace, monospace; }
+                            font: 400 12px/17px var(--font-readout); }
     #sectionswitch button[hidden] { display: none; }
     #sectionswitch button:hover:not([aria-selected="true"]) { background: rgba(255, 255, 255, .06); }
     #sectionswitch button:active { background: rgba(255, 255, 255, .1); }
@@ -265,7 +265,7 @@
     #pane .paneaction:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
     #pane .paneaction.danger { color: var(--rec); }
     /* A native select, drawn flat with a chevron (the Camera section's Anchor, the Zoom section's Ease). */
-    #pane select { appearance: none; -webkit-appearance: none; font: 400 12px/18px "Geist Mono", ui-monospace, monospace;
+    #pane select { appearance: none; -webkit-appearance: none; font: 400 12px/18px var(--font-readout);
                    color: var(--text); background: rgba(255, 255, 255, .06) no-repeat right 8px center / 10px;
                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23999' stroke-width='1.4'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
                    border: 0; border-radius: 8px; padding: 5px 26px 5px 10px; cursor: pointer; }
@@ -287,7 +287,7 @@
        <details>, so the keyboard and the accessibility tree come with it. */
     #pane details.more > summary { display: flex; align-items: center; gap: 8px; padding: 6px 2px; cursor: pointer;
                                    list-style: none; user-select: none; color: var(--text-dim);
-                                   font: 400 12px/17px "Geist Mono", ui-monospace, monospace; }
+                                   font: 400 12px/17px var(--font-readout); }
     #pane details.more > summary::-webkit-details-marker { display: none; }
     #pane details.more > summary::before { content: ""; width: 6px; height: 6px; flex: none;
                                            border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
@@ -830,7 +830,7 @@
     /* Custom's colour fields are look-grid.css's .look-custom-input, the
        still editor's field, so they are left out of the pane's own. */
     #pane input[type="number"], #pane input[type="text"]:not(.look-custom-input) {
-      font: 400 12px/18px "Geist Mono", ui-monospace, monospace; color: var(--text); text-align: right;
+      font: 400 12px/18px var(--font-readout); color: var(--text); text-align: right;
       background: rgba(255, 255, 255, .06); border: 0; border-radius: 8px; padding: 5px 10px; min-width: 0; }
     #pane input[type="number"]:focus-visible, #pane input[type="text"]:not(.look-custom-input):focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     #embedwidth { width: 6em; }
