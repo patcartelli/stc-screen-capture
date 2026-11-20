@@ -128,3 +128,25 @@ describe("selectedOption and isCaptureSize", () => {
     expect(isCaptureSize(c, { width: 3838, height: 2160 })).toBe(false);
   });
 });
+
+describe("isValidOutputSize and parseProject (STC-665)", () => {
+  test("refuses zero, negative, odd and wrong-aspect sizes; accepts derived ones and the capture itself", async () => {
+    const { isValidOutputSize } = await import("../src/output-size.js");
+    const c = cap(1920, 1080);
+    expect(isValidOutputSize(c, cap(1280, 720))).toBe(true);
+    expect(isValidOutputSize(c, outputSizeFor(c, 1232))).toBe(true);
+    expect(isValidOutputSize(c, c)).toBe(true);
+    expect(isValidOutputSize(cap(1001, 563), cap(1001, 563))).toBe(true); // odd capture, verbatim
+    for (const bad of [cap(0, 0), cap(-1280, -720), cap(1281, 721), cap(1280, 1280), cap(1280.5, 720)]) {
+      expect(isValidOutputSize(c, bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  test("parseProject falls back to the capture size on a bad output", async () => {
+    const { parseProject } = await import("../src/trim.js");
+    const doc = (w: unknown, h: unknown) => ({ version: 3, output: { fps: 60, width: w, height: h } });
+    expect(parseProject(doc(0, 0), 1920, 1080, 1e9).output).toMatchObject({ width: 1920, height: 1080 });
+    expect(parseProject(doc(1281, 721), 1920, 1080, 1e9).output).toMatchObject({ width: 1920, height: 1080 });
+    expect(parseProject(doc(1280, 720), 1920, 1080, 1e9).output).toMatchObject({ width: 1280, height: 720 });
+  });
+});

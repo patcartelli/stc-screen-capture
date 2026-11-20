@@ -165,7 +165,7 @@ describe("the library grid", () => {
     const text = await card.innerText();
     expect(text).toContain("No captures yet");
     expect(text).toContain(recordings);
-    expect(text).toMatch(/takes a screenshot/);
+    expect(text).toMatch(/takes a shot/);
     expect(text).toMatch(/starts a recording/);
     const look = () => card.evaluate((n) => {
       const s = getComputedStyle(n);

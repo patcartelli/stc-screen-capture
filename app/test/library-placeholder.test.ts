@@ -21,13 +21,13 @@ describe("placeholderFor", () => {
     const p = placeholderFor(list(), ctx)!;
     expect(p.state).toBe("empty");
     expect(p.path).toBe(ctx.folder);
-    expect(p.body).toContain("⌃⌥⇧⌘3 takes a screenshot");
+    expect(p.body).toContain("⌃⌥⇧⌘3 takes a shot");
     expect(p.body).toContain("⌃⌥⇧⌘4 starts a recording");
   });
 
-  test("with both hotkeys unbound it points at the buttons instead", () => {
+  test("with both hotkeys unbound it points at the menu bar instead", () => {
     const p = placeholderFor(list(), { ...ctx, shotKey: null, recordKey: null })!;
-    expect(p.body).toContain("Record or Shot");
+    expect(p.body).toContain("menu bar");
     expect(p.body).not.toContain("null");
   });
 

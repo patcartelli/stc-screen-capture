@@ -99,8 +99,8 @@ export const MIN_ZOOM_DELTA_FRACTION = 0.85;
 export const CROP_PAD_FRACTION = 0.2;
 
 /**
- * The crop's width and height are independently clamped into this range of
- * the full frame — BRIEF.md's locked "0.5 / 0.7 of the visible viewport"
+ * The crop's width and height are clamped into this range of the full
+ * frame to ONE shared value (STC-387, see `finishCrop`) — BRIEF.md's locked "0.5 / 0.7 of the visible viewport"
  * bound, carried over from the cursor-clustering design stage 2 supersedes.
  * A floor so a crop never reads as an uncomfortably tight zoom on a tiny
  * element; a ceiling so a crop that would barely differ from the full frame
