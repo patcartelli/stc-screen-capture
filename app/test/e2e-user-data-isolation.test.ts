@@ -28,6 +28,8 @@ import { ROOT_ENV, isUnderTmp } from "./_launch.js";
  *    isolating it.
  * 3. A root a test passes must be under the system temp directory
  *    (`isUnderTmp`, which the launcher applies before starting the app).
+ * 4. (STC-683) The launcher runs the fake helper unless a test opts into the
+ *    real one with `helper: "real"`, and the files that may are listed here.
  *
  * No behavioural test can make these claims: an app pointed at a real folder
  * still starts, and most assertions still pass. So they are checked
@@ -122,5 +124,48 @@ describe("a root a test passes must be a temp folder (STC-658)", () => {
 
   test("a path that only climbs out of the temp directory is refused", () => {
     expect(isUnderTmp(join(tmpdir(), "..", "..", "Users"))).toBe(false);
+  });
+});
+
+/** Rule 4: how many `helper: "real"` opt-ins are in code. */
+function realHelperOptIns(src: string): number {
+  return (stripComments(src).match(/\bhelper:\s*"real"/g) ?? []).length;
+}
+
+/**
+ * The only files that run the real Swift helper (STC-683), each with why. The
+ * real binary runs Vision's 45 s `warm-text`, probes permissions, may flash the
+ * recording indicator and calls ScreenCaptureKit outside the serial list, and
+ * makes CI depend on `helper/build/`. Adding a file here is a decision, not a
+ * default; the reason is also in the test's own `why`.
+ */
+const REAL_HELPER_FILES: Record<string, string> = {
+  "frame-png.e2e.test.ts": "the saved PNG is ImageIO's real encode; the fake writes one placeholder byte",
+  "shell.e2e.test.ts": "the smoke test that the app spawns the real binary and shows its real grant refusal",
+};
+
+describe("an e2e app runs the fake helper unless its test opts into the real one (STC-683)", () => {
+  test("the launcher defaults to the stand-in and requires a reason for the real one", () => {
+    const src = stripComments(readFileSync(join(TEST_DIR, LAUNCHER), "utf8"));
+    expect(src).toContain('helper = "fake"');
+    expect(src).toContain("STC_HELPER_BIN = FAKE_HELPER");
+    expect(src).toMatch(/helper === "real" && !why/);
+  });
+
+  test("exactly the listed files opt into the real helper, each with a why", () => {
+    const found = readdirSync(TEST_DIR)
+      .filter((f) => f.endsWith(".ts") && f !== SELF && f !== LAUNCHER)
+      .filter((f) => realHelperOptIns(readFileSync(join(TEST_DIR, f), "utf8")) > 0)
+      .sort();
+    expect(found, "a file opts into the real helper that is not in REAL_HELPER_FILES (or a listed one no longer does)")
+      .toEqual(Object.keys(REAL_HELPER_FILES).sort());
+    for (const f of found) {
+      expect(readFileSync(join(TEST_DIR, f), "utf8"), `${f} opts in without a why`).toMatch(/\bwhy:\s*["`]/);
+    }
+  });
+
+  test("the pattern catches an opt-in in code, and not one in a comment", () => {
+    expect(realHelperOptIns(`launchIsolated({ helper: "real", why: "x" })`)).toBe(1);
+    expect(realHelperOptIns(`// helper: "real" is discussed`)).toBe(0);
   });
 });

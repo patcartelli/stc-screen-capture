@@ -23,6 +23,8 @@ async function launch() {
   // STC-403: isolated from the developer's real settings too, same as every
   // other fixture — this used to load the real ~/Library/.../settings.json.
   app = await launchIsolated({
+    helper: "real",
+    why: "the smoke test that the app spawns the real binary, gets its pid and heartbeat, and shows the real grant refusal",
     args: [root, `--user-data-dir=${mkdtempSync(join(tmpdir(), "stc-ud-"))}`], cwd: root,
     env: {
       STC_RECORDINGS_DIR: mkdtempSync(join(tmpdir(), "stc-e2e-")),

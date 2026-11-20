@@ -50,7 +50,10 @@ afterEach(async () => { const a = app; app = undefined; await closeApp(a); }, AP
 
 async function openTake():
     Promise<{ win: Page; mainWin: Page; takeDir: string; root: string }> {
-  const { app: a, win: mainWin, editorWin, takeDir, dir } = await launchWithTakeInEditor();
+  const { app: a, win: mainWin, editorWin, takeDir, dir } = await launchWithTakeInEditor({
+    helper: "real",
+    why: "the saved PNG must come out of ImageIO's real encode, which is what the pixel-identity claim is about",
+  });
   app = a;
   // Not `#clock`: its HTML placeholder is already "0:00:00 / 0:00:00", so a
   // poll for a time-shaped string passes before the player exists, and the
