@@ -581,6 +581,7 @@ const posterAsked = new Map<string, Promise<void>>();
 async function showPoster(item: LibraryItem, img: HTMLImageElement): Promise<void> {
   const dir = item.dir;
   if (!dir) throw new Error("a recording's poster lives inside its bundle directory");
+  if (dir.length > 0) throw new Error("EXPERIMENT: poster ask disabled to bisect the scrubber e2e hang");
   let asked = posterAsked.get(dir);
   if (!asked) { asked = recorder.makePoster(dir); posterAsked.set(dir, asked); }
   await asked;
