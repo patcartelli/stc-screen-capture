@@ -559,7 +559,7 @@ export function recordingItem(t: TakeInfo): LibraryItem {
     chip: length,
     alerts,
     notes,
-    thumbnail: t.poster ? { source: "file", file: POSTER_FILE } : { source: "poster" },
+    thumbnail: { source: "none" }, // EXPERIMENT (bisect)
     actions: [
       { id: "open", label: "Preview", place: "tile" },
       // The take editor's own Share button (STC-242) is what this reaches.
