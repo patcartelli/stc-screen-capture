@@ -459,6 +459,13 @@ process.stdin.on("data", (chunk) => {
         send("copied-file", { seq, changeCount: 1 });
         break;
       }
+      // ── STC-671: a recording's poster. The stand-in writes nothing and says
+      // it did, so a Library tile in an e2e app asks once and is answered
+      // instead of logging a failed request per tile.
+      case "make-poster": {
+        send("poster-made", { seq, file: "poster.jpg", width: 640, height: 360 });
+        break;
+      }
       case "pasteboard-files": {
         // Unset: an error, so a test machine's copy purge always SKIPS rather
         // than deleting a developer's real copies (purgeDecision's undefined).
