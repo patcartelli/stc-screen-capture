@@ -308,6 +308,13 @@ export const SUPPORTED_ANCHORS_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 
 /** The cached decorated thumbnail, beside the document it was rendered from. */
 export const THUMBNAIL_FILE = "thumb.png";
 
+/**
+ * A recording's Library picture (STC-671): one raw display frame about a second
+ * in, written by the helper's `make-poster` inside the take's folder, so
+ * deleting the take deletes it (rule 5). Must equal the helper's `POSTER_FILE`.
+ */
+export const POSTER_FILE = "poster.jpg";
+
 /** A recording that can be listed, played and exported. */
 export interface TakeInfo {
   dir: string;
@@ -318,6 +325,8 @@ export interface TakeInfo {
   height: number;
   events: number;
   bytes: number;
+  /** Whether `POSTER_FILE` is already in the take's folder (STC-671). */
+  poster?: boolean;
   /** User-chosen display name. Never the identity, never the sort key. */
   label?: string;
   /**
@@ -499,11 +508,15 @@ const MODE_LABELS: Readonly<Record<DecorationMode, string>> = {
 /**
  * One recording, as a library item.
  *
- * A recording has no thumbnail in this slice and says so structurally rather
- * than by the view knowing which kinds have pictures. Decoding a poster frame
- * for every recording is the WebCodecs path CLAUDE.md documents as tab-killing
- * at scale (one in-flight request, ~30 MB per `VideoFrame`), so it is a
- * deliberate follow-up, not an oversight.
+ * A recording's picture is a poster frame the HELPER writes (STC-671), not a
+ * renderer-side decode: the WebCodecs path is tab-killing at scale (one
+ * in-flight request, ~30 MB per `VideoFrame`), which is why this was `"none"`
+ * until the helper had `make-poster`. Present: read it as a cached `"file"`.
+ * Absent (older takes, or a failed make): the dark tile exactly as before, with
+ * no image element and no paint step. Main asks the helper for the missing ones
+ * when the library is listed and tells the window when one lands, so a tile
+ * never asks for itself (a tile that did wedged the editor e2e on CI). The scan
+ * only checks the file's NAME, never reads media.
  */
 export function recordingItem(t: TakeInfo): LibraryItem {
   const notes: string[] = [];
@@ -542,7 +555,7 @@ export function recordingItem(t: TakeInfo): LibraryItem {
     chip: length,
     alerts,
     notes,
-    thumbnail: { source: "none" },
+    thumbnail: t.poster ? { source: "file", file: POSTER_FILE } : { source: "none" },
     actions: [
       { id: "open", label: "Preview", place: "tile" },
       // The take editor's own Share button (STC-242) is what this reaches.

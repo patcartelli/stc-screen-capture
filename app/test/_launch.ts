@@ -132,6 +132,10 @@ export async function launchIsolated(options: LaunchOptions = {}): Promise<Elect
   for (const name of ROOT_ENV) env[name] = roots[name];
   env.STC_PASTEBOARD = roots.pasteboard;
   env.STC_NO_SHUTTER = caller.STC_NO_SHUTTER ?? "1";
+  // STC-671: no poster is made unless a test asks. A poster landing makes the Library
+  // rescan and redraw its tiles, which races a test that clicks a tile right after launch
+  // (a click on a tile that is replaced mid-click never opens anything).
+  env.STC_NO_POSTERS = caller.STC_NO_POSTERS ?? "1";
   // STC-683: the stand-in unless the test asked for the real one by name. An
   // inherited STC_HELPER_BIN is the developer's shell, not the test's choice.
   if (caller.STC_HELPER_BIN !== undefined) env.STC_HELPER_BIN = caller.STC_HELPER_BIN;

@@ -569,7 +569,7 @@ async function showCachedThumbnail(item: LibraryItem, img: HTMLImageElement,
   const dir = item.dir;
   if (!dir) throw new Error("a cached thumbnail lives inside a bundle directory");
   const bytes = await recorder.getFrame(dir, file);
-  img.src = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+  img.src = URL.createObjectURL(new Blob([bytes], { type: file.endsWith(".jpg") ? "image/jpeg" : "image/png" }));
 }
 
 const libraryCallbacks: LibraryCallbacks = {

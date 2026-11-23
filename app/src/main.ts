@@ -76,6 +76,7 @@ import { recordRefusalText, stillNoticeText } from "./refusals.js";
 import { reclaimPrompt, reclaimResult } from "./reclaim.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
          recordingDurationMs, recordingScopeLabel, GIF_EXTENSION, GIF_PROBE_MAX_BYTES } from "./library.js";
+import { POSTER_FILE, type LibraryItem } from "./library-items.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import {
   openOverlay, closeOverlay, overlayIsOpen, HIDE_SETTLE_MS, pushCameraPreviewFrame, noteCameraPreviewStopped,
@@ -1031,6 +1032,49 @@ function presentDeferredRecoveredPanels(): void {
 }
 
 /**
+ * Have the helper write `dir`'s `poster.jpg` (STC-671). The frame is chosen from the
+ * take's own anchors; a take with none yet gets frame 0. Returns whether a poster now
+ * exists. Never throws: a recording without a picture is a dark tile, not an error.
+ */
+async function makePosterFor(dir: string): Promise<boolean> {
+  const helper = sup;
+  // `STC_NO_POSTERS`: the e2e launcher's default (see `app/test/_launch.ts`).
+  if (!helper || process.env.STC_NO_POSTERS) return false;
+  let durationMs = 0;
+  try {
+    durationMs = recordingDurationMs(JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"))) ?? 0;
+  } catch { /* no anchors yet: frame 0 */ }
+  try {
+    await helper.makePoster(dir, durationMs);
+    return true;
+  } catch (err: any) {
+    console.error("[poster] could not make one for", dir, String(err?.detail ?? err?.message ?? err));
+    return false;
+  }
+}
+
+/** Takes already asked for a poster this session: a failed make is not retried on every listing. */
+const posterAsked = new Set<string>();
+
+/**
+ * Older takes have no `poster.jpg` (STC-671). When the library is listed, ask the helper for
+ * each missing one, once per session, in the background, and tell the window when a file has
+ * actually landed so it rescans and the tile picks it up. The tile never asks for itself: a
+ * tile that did changed its DOM while the editor e2e clicked it, and wedged those tests.
+ * Nothing is sent when no file appeared (the fake helper, a refusal), so there is no rescan loop.
+ */
+function ensurePosters(items: readonly LibraryItem[]): void {
+  for (const item of items) {
+    const dir = item.dir;
+    if (item.kind !== "recording" || item.thumbnail.source !== "none" || !dir || posterAsked.has(dir)) continue;
+    posterAsked.add(dir);
+    void makePosterFor(dir).then(async (made) => {
+      if (made && await stat(join(dir, POSTER_FILE)).then(() => true, () => false)) libraryChanged();
+    });
+  }
+}
+
+/**
  * A take ended cleanly (`HelperSupervisor`'s `take-ended`).
  *
  * Quitting does not present: `shutdown()` stops a live take, which fires this
@@ -1057,6 +1101,9 @@ async function onTakeEnded(dir: unknown, reason?: unknown): Promise<void> {
     if (quitting) return;
     if (sup?.state === "recording") { if (r.ok) deferredRecoveredPanels.push(dir); return; }
   }
+  // STC-671: the Library picture, made now so the tile has it the first time it is listed.
+  // Fire and forget: a failure costs the picture only (the tile asks again, lazily).
+  void makePosterFor(dir);
   // STC-579: the pill is for a recording in progress and says nothing after a stop (it
   // is already gone), so the panel goes up at once for every stop, with no wait.
   const helperDecided = typeof reason === "string" && isHelperDecidedStop(reason);
@@ -2935,8 +2982,10 @@ ipcMain.handle("library:list", async (_e, filter?: string) => {
   // press Try again.
   if (libraryFailsLeft === undefined) libraryFailsLeft = Number(process.env.STC_LIBRARY_FAIL_FIRST) || 0;
   if (libraryFailsLeft > 0) { libraryFailsLeft--; throw new Error("scan failed (STC_LIBRARY_FAIL_FIRST)"); }
-  return listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
-                     typeof filter === "string" ? filter : undefined);
+  const list = await listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
+                                 typeof filter === "string" ? filter : undefined);
+  ensurePosters(list.items);
+  return list;
 });
 
 /**

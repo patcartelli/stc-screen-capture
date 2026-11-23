@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listLibrary, listTakes, THUMBNAIL_FILE } from "../src/library.js";
+import { POSTER_FILE } from "../src/library-items.js";
 import { setTakeLabel } from "../src/takes.js";
 
 /**
@@ -281,12 +282,17 @@ describe("the presentation each kind owns", () => {
     expect(fresh!.thumbnail).toEqual({ source: "render" });
   });
 
-  test("a recording has no thumbnail in this slice, and says so structurally", async () => {
+  test("a recording with a poster names it; one without stays the plain dark tile (STC-671)", async () => {
+    const withPoster = makeRecording("2026-09-08_10-00-01");
+    writeFileSync(join(withPoster, POSTER_FILE), "jpeg");
     makeRecording("2026-09-08_10-00-00");
-    const [item] = (await listLibrary(env(), null)).items;
-    // Not `{source:"render"}` with the renderer quietly failing: a poster frame
-    // for every recording is a decode per tile, deferred deliberately.
-    expect(item!.thumbnail).toEqual({ source: "none" });
+    const [cached, fresh] = (await listLibrary(env(), null)).items;
+    expect(cached!.thumbnail).toEqual({ source: "file", file: POSTER_FILE });
+    // Never `"render"`: that is the still's renderer-side decode, which a
+    // recording must not use (one WebCodecs frame is ~30 MB). And never a source
+    // that makes the tile do work of its own: main asks the helper for the missing
+    // poster when the library is listed, and a tile with none is the old dark one.
+    expect(fresh!.thumbnail).toEqual({ source: "none" });
   });
 
   test("a camera that recorded nothing is an amber badge on the tile (STC-287, STC-584)", async () => {
