@@ -1038,7 +1038,8 @@ function presentDeferredRecoveredPanels(): void {
  */
 async function makePosterFor(dir: string): Promise<boolean> {
   const helper = sup;
-  if (!helper) return false;
+  // `STC_NO_POSTERS`: the e2e launcher's default (see `app/test/_launch.ts`).
+  if (!helper || process.env.STC_NO_POSTERS) return false;
   let durationMs = 0;
   try {
     durationMs = recordingDurationMs(JSON.parse(await readFile(join(dir, "anchors.json"), "utf8"))) ?? 0;
