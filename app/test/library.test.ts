@@ -282,16 +282,17 @@ describe("the presentation each kind owns", () => {
     expect(fresh!.thumbnail).toEqual({ source: "render" });
   });
 
-  test("a recording with a poster names it; one without asks the helper for one (STC-671)", async () => {
+  test("a recording with a poster names it; one without stays the plain dark tile (STC-671)", async () => {
     const withPoster = makeRecording("2026-09-08_10-00-01");
     writeFileSync(join(withPoster, POSTER_FILE), "jpeg");
     makeRecording("2026-09-08_10-00-00");
     const [cached, fresh] = (await listLibrary(env(), null)).items;
     expect(cached!.thumbnail).toEqual({ source: "file", file: POSTER_FILE });
     // Never `"render"`: that is the still's renderer-side decode, which a
-    // recording must not use (one WebCodecs frame is ~30 MB). A poster is the
-    // helper's, so it has its own source and the view still never reads a kind.
-    expect(fresh!.thumbnail).toEqual({ source: "poster" });
+    // recording must not use (one WebCodecs frame is ~30 MB). And never a source
+    // that makes the tile do work of its own: main asks the helper for the missing
+    // poster when the library is listed, and a tile with none is the old dark one.
+    expect(fresh!.thumbnail).toEqual({ source: "none" });
   });
 
   test("a camera that recorded nothing is an amber badge on the tile (STC-287, STC-584)", async () => {

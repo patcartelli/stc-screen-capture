@@ -76,6 +76,7 @@ import { recordRefusalText, stillNoticeText } from "./refusals.js";
 import { reclaimPrompt, reclaimResult } from "./reclaim.js";
 import { listTakes, listLibrary, THUMBNAIL_FILE, scanFinishedFilesAt, findBuriedExport,
          recordingDurationMs, recordingScopeLabel, GIF_EXTENSION, GIF_PROBE_MAX_BYTES } from "./library.js";
+import { POSTER_FILE, type LibraryItem } from "./library-items.js";
 import { PRODUCT_NAME, LEGACY_APP_DIR_NAME, productStamp } from "./product.js";
 import {
   openOverlay, closeOverlay, overlayIsOpen, HIDE_SETTLE_MS, pushCameraPreviewFrame, noteCameraPreviewStopped,
@@ -1051,14 +1052,26 @@ async function makePosterFor(dir: string): Promise<boolean> {
   }
 }
 
-/** A recording tile asks for its picture (STC-671): older takes have none until first listed. */
-ipcMain.handle("library:makePoster", async (_e, dir: unknown) => {
-  const { saveFolder } = readSettings(app.getPath("userData"));
-  if (typeof dir !== "string" || !insideTakesRoot(process.env, saveFolder, dir)) {
-    throw new Error("refusing a folder outside the recordings folder");
+/** Takes already asked for a poster this session: a failed make is not retried on every listing. */
+const posterAsked = new Set<string>();
+
+/**
+ * Older takes have no `poster.jpg` (STC-671). When the library is listed, ask the helper for
+ * each missing one, once per session, in the background, and tell the window when a file has
+ * actually landed so it rescans and the tile picks it up. The tile never asks for itself: a
+ * tile that did changed its DOM while the editor e2e clicked it, and wedged those tests.
+ * Nothing is sent when no file appeared (the fake helper, a refusal), so there is no rescan loop.
+ */
+function ensurePosters(items: readonly LibraryItem[]): void {
+  for (const item of items) {
+    const dir = item.dir;
+    if (item.kind !== "recording" || item.thumbnail.source !== "none" || !dir || posterAsked.has(dir)) continue;
+    posterAsked.add(dir);
+    void makePosterFor(dir).then(async (made) => {
+      if (made && await stat(join(dir, POSTER_FILE)).then(() => true, () => false)) libraryChanged();
+    });
   }
-  if (!(await makePosterFor(dir))) throw new Error("could not make a poster for this recording");
-});
+}
 
 /**
  * A take ended cleanly (`HelperSupervisor`'s `take-ended`).
@@ -2968,8 +2981,10 @@ ipcMain.handle("library:list", async (_e, filter?: string) => {
   // press Try again.
   if (libraryFailsLeft === undefined) libraryFailsLeft = Number(process.env.STC_LIBRARY_FAIL_FIRST) || 0;
   if (libraryFailsLeft > 0) { libraryFailsLeft--; throw new Error("scan failed (STC_LIBRARY_FAIL_FIRST)"); }
-  return listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
-                     typeof filter === "string" ? filter : undefined);
+  const list = await listLibrary(process.env, readSettings(app.getPath("userData")).saveFolder,
+                                 typeof filter === "string" ? filter : undefined);
+  ensurePosters(list.items);
+  return list;
 });
 
 /**

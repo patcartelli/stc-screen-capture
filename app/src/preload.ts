@@ -66,8 +66,6 @@ contextBridge.exposeInMainWorld("recorder", {
   // STC-592: a saved GIF's bytes (its tile) and its Share (the file on the pasteboard).
   gifBytes: (file: string) => ipcRenderer.invoke("library:gifBytes", file),
   copyFile: (file: string) => ipcRenderer.invoke("library:copyFile", file),
-  // STC-671: have the helper write a recording's poster.jpg (rejects if it could not).
-  makePoster: (dir: string) => ipcRenderer.invoke("library:makePoster", dir),
   start: () => ipcRenderer.invoke("recorder:start"),
   stop: () => ipcRenderer.invoke("recorder:stop"),
   reveal: (dir: string) => ipcRenderer.invoke("recorder:reveal", dir),

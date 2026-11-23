@@ -177,13 +177,6 @@ export type LibraryThumbnail =
   | { source: "render" }
   | { source: "none" }
   /**
-   * A recording with no poster yet (STC-671): the view asks main to have the
-   * helper make `POSTER_FILE`, then reads it back like a cached `"file"`. A
-   * source of its own, never `"render"`, because `"render"` is a still's
-   * renderer-side decode and a recording must not take that path.
-   */
-  | { source: "poster" }
-  /**
    * The item's own file is an animation (STC-592): its first frame at rest,
    * the animation while the pointer is over the item, and never the animation
    * under Reduce Motion. The file is the item's `file`; nothing is cached.
@@ -518,9 +511,12 @@ const MODE_LABELS: Readonly<Record<DecorationMode, string>> = {
  * A recording's picture is a poster frame the HELPER writes (STC-671), not a
  * renderer-side decode: the WebCodecs path is tab-killing at scale (one
  * in-flight request, ~30 MB per `VideoFrame`), which is why this was `"none"`
- * until the helper had `make-poster`. Present: read it. Absent (older takes,
- * or a failed make): `{ source: "poster" }` asks for one, and a failure leaves
- * the dark tile. The scan only checks the file's NAME, never reads media.
+ * until the helper had `make-poster`. Present: read it as a cached `"file"`.
+ * Absent (older takes, or a failed make): the dark tile exactly as before, with
+ * no image element and no paint step. Main asks the helper for the missing ones
+ * when the library is listed and tells the window when one lands, so a tile
+ * never asks for itself (a tile that did wedged the editor e2e on CI). The scan
+ * only checks the file's NAME, never reads media.
  */
 export function recordingItem(t: TakeInfo): LibraryItem {
   const notes: string[] = [];
@@ -559,7 +555,7 @@ export function recordingItem(t: TakeInfo): LibraryItem {
     chip: length,
     alerts,
     notes,
-    thumbnail: { source: "none" }, // EXPERIMENT (bisect)
+    thumbnail: t.poster ? { source: "file", file: POSTER_FILE } : { source: "none" },
     actions: [
       { id: "open", label: "Preview", place: "tile" },
       // The take editor's own Share button (STC-242) is what this reaches.
