@@ -76,9 +76,12 @@ describe("quitting while recording", () => {
     // during a take — STC-501, STC-517: the fake helper's own heartbeat can be
     // read after `start` on a loaded runner) are not part of that order and
     // may land anywhere around the take, so they are filtered rather than
-    // pinned. So is `warm-text`, sent whenever the helper comes up (STC-572).
+    // pinned. So is `warm-text`, sent whenever the helper comes up (STC-572), and
+    // `make-poster`, which listing the library sends for a recording with no
+    // poster yet (STC-671).
     const lifecycle = readFileSync(log, "utf8").trim().split("\n")
-      .filter((c) => c !== "devices" && c !== "windows" && c !== "status" && c !== "warm-text");
+      .filter((c) => c !== "devices" && c !== "windows" && c !== "status" && c !== "warm-text"
+                  && c !== "make-poster");
     expect(lifecycle).toEqual(["start", "stop", "quit"]);
   }, 120_000);
 });
